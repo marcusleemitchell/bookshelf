@@ -9,24 +9,26 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 - Node ≥ 25 (`.nvmrc`: 25.9.0), ESM (`"type": "module"`), one root `package.json` (no workspaces).
 - `server/`: Hono + `@hono/node-server`, TypeScript run directly by Node type stripping (no build step, no tsx), SQLite via built-in `node:sqlite` (ADR 0003).
 - `shared/`: Zod schemas, inferred types and pure derivation/formatting functions — the API contract, imported by server and web.
-- `web/`: Vite + React + TypeScript (phase 1 is a status shell; phase 2 builds the SPEC §6 screens).
+- `web/`: Vite + React + TypeScript PWA (SPEC §6): typed API client (`web/src/api/client.ts`), hash router, screens, Dexie outbox + read-model cache (`web/src/offline/`, ADR 0007), one plain stylesheet. No router or CSS framework.
+- `scripts/`: dependency-free tooling run by Node (icon generator).
 - Tests: Vitest (projects `node` and `web`/jsdom), Testing Library, fake-indexeddb.
 
 ## Commands
 
-| Command                 | What it does                                                         |
-| ----------------------- | -------------------------------------------------------------------- |
-| `npm run dev`           | Server with `node --watch` + Vite dev server proxying `/api`         |
-| `npm run dev:server`    | Server only, restarting on changes in `server/` and `shared/`        |
-| `npm run build`         | Type-check everything, then build the web app into `web/dist`        |
-| `npm start`             | Production server on `127.0.0.1:$PORT`, serving `web/dist` if built  |
-| `npm run lint`          | ESLint (strict type-checked)                                         |
-| `npm run format`        | Prettier write                                                       |
-| `npm run format:check`  | Prettier check                                                       |
-| `npm run typecheck`     | `tsc --noEmit` for server/shared and for web                         |
-| `npm test`              | Vitest once                                                          |
-| `npm run test:coverage` | Vitest with coverage; fails below 90% lines on `server/` / `shared/` |
-| `npm run check`         | lint + format:check + typecheck + test:coverage — the quality gate   |
+| Command                 | What it does                                                        |
+| ----------------------- | ------------------------------------------------------------------- |
+| `npm run dev`           | Server with `node --watch` + Vite dev server proxying `/api`        |
+| `npm run dev:server`    | Server only, restarting on changes in `server/` and `shared/`       |
+| `npm run build`         | Type-check everything, then build the web app into `web/dist`       |
+| `npm start`             | Production server on `127.0.0.1:$PORT`, serving `web/dist` if built |
+| `npm run lint`          | ESLint (strict type-checked)                                        |
+| `npm run format`        | Prettier write                                                      |
+| `npm run format:check`  | Prettier check                                                      |
+| `npm run typecheck`     | `tsc --noEmit` for server/shared and for web                        |
+| `npm test`              | Vitest once                                                         |
+| `npm run test:coverage` | Vitest with coverage; fails below 90% lines in any source folder    |
+| `npm run icons`         | Regenerate the PWA icons in `web/public/` (commit the output)       |
+| `npm run check`         | lint + format:check + typecheck + test:coverage — the quality gate  |
 
 `npm run check` and `npm run build` must pass before any commit. Never disable, skip or weaken a lint rule, test or coverage threshold to get there.
 
@@ -63,7 +65,7 @@ Approved runtime: hono, @hono/node-server, zod, react, react-dom, recharts, dexi
 
 - Server routes: integration tests through `app.request()` against a temp SQLite DB, covering success and error paths.
 - Shared: exhaustive unit tests for derivations and formatting.
-- Web: Testing Library + jsdom; the offline outbox will use fake-indexeddb.
+- Web: Testing Library + jsdom against a mock API (`web/src/test/server.ts`) with schema-validated fixtures (`web/src/test/fixtures.ts`), a fixed clock and fake-indexeddb; `renderApp()` renders the whole app at a hash route. Every API response the web app reads goes through `web/src/api/client.ts`; never call `fetch` elsewhere.
 - Write the failing test first for regressions. Keep tests deterministic (fixed clock via `env.clock`).
 
 ## Git

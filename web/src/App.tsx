@@ -1,44 +1,203 @@
-import { useEffect, useState } from 'react';
-import { healthResponseSchema, type HealthResponse } from '../../shared/index.ts';
-
-type ServerState =
-  { kind: 'loading' } | { kind: 'ok'; health: HealthResponse } | { kind: 'error'; message: string };
-
 /**
- * Phase 1 shell: reports whether the Bookshelf server is reachable.
- * The real screens (SPEC §6) replace this in phase 2.
+ * The app shell: offline banner, the current screen (hash router), toasts and
+ * the bottom tab bar. Also owns the sync triggers that replay the outbox
+ * (on start, reconnect, return to the app and on an interval).
  */
-export function App({ fetchImpl = fetch }: { fetchImpl?: typeof fetch }) {
-  const [state, setState] = useState<ServerState>({ kind: 'loading' });
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useOutboxCounts, useReachable, useServices, useStore } from './app/hooks.ts';
+import { ServicesContext } from './app/hooks.ts';
+import { createServices, invalidate, syncNow, type Services } from './app/services.ts';
+import {
+  CalendarIcon,
+  LibraryIcon,
+  SettingsIcon,
+  StatsIcon,
+  TodayIcon,
+} from './components/Icons.tsx';
+import { plural } from './lib/labels.ts';
+import { href, paths, tabFor, useRoute, type Route, type TabName } from './router.ts';
+import { AddBook } from './screens/AddBook.tsx';
+import { CalendarScreen } from './screens/Calendar.tsx';
+import { Library } from './screens/Library.tsx';
+import { LogSession } from './screens/LogSession.tsx';
+import { NotFound } from './screens/NotFound.tsx';
+import { Settings } from './screens/Settings.tsx';
+import { Today } from './screens/Today.tsx';
+import { Loading } from './components/ui.tsx';
 
+// Screens with charts pull in Recharts; load them on demand (the service
+// worker precaches every chunk, so this still works offline).
+const BookDetailScreen = lazy(async () => ({
+  default: (await import('./screens/BookDetail.tsx')).BookDetailScreen,
+}));
+const Stats = lazy(async () => ({ default: (await import('./screens/Stats.tsx')).Stats }));
+
+/** How often pending outbox ops are retried while the app is open. */
+export const SYNC_INTERVAL_MS = 30_000;
+/** How long a toast stays visible. */
+export const TOAST_MS = 4_000;
+
+export function App({ services }: { services?: Services }) {
+  const [value] = useState(() => services ?? createServices());
+  return (
+    <ServicesContext value={value}>
+      <Shell />
+    </ServicesContext>
+  );
+}
+
+const TABS: readonly { name: TabName; label: string; path: string; icon: ReactNode }[] = [
+  { name: 'today', label: 'Today', path: paths.today(), icon: <TodayIcon /> },
+  { name: 'library', label: 'Library', path: paths.library(), icon: <LibraryIcon /> },
+  { name: 'calendar', label: 'Calendar', path: paths.calendar(), icon: <CalendarIcon /> },
+  { name: 'stats', label: 'Stats', path: paths.stats(), icon: <StatsIcon /> },
+  { name: 'settings', label: 'Settings', path: paths.settings(), icon: <SettingsIcon /> },
+];
+
+function TabBar({ active }: { active: TabName | null }) {
+  return (
+    <nav className="tabbar" aria-label="Main">
+      <ul>
+        {TABS.map((tab) => (
+          <li key={tab.name}>
+            <a href={href(tab.path)} aria-current={tab.name === active ? 'page' : undefined}>
+              {tab.icon}
+              <span>{tab.label}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function OfflineBanner() {
+  const reachable = useReachable();
+  const { pending, failed } = useOutboxCounts();
+  if (reachable && failed === 0) return null;
+  return (
+    <div className="banner" role="status">
+      {!reachable && (
+        <span>
+          <strong>Offline.</strong> Changes are saved on this device and sync when the server is
+          reachable.
+        </span>
+      )}
+      {pending > 0 && <span>{plural(pending, 'change')} waiting to sync.</span>}
+      {failed > 0 && (
+        <span>
+          {plural(failed, 'change')} couldn’t sync. <a href={href(paths.settings())}>Review</a>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Toast() {
+  const services = useServices();
+  const message = useStore(services.toast);
   useEffect(() => {
-    const controller = new AbortController();
-    fetchImpl('/api/health', { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`Server responded with HTTP ${res.status}`);
-        }
-        const health = healthResponseSchema.parse(await res.json());
-        setState({ kind: 'ok', health });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setState({
-          kind: 'error',
-          message: error instanceof Error ? error.message : 'Unknown error',
-        });
-      });
+    if (message === null) return;
+    const id = setTimeout(() => {
+      services.toast.set(null);
+    }, TOAST_MS);
     return () => {
-      controller.abort();
+      clearTimeout(id);
     };
-  }, [fetchImpl]);
+  }, [message, services]);
+  return (
+    <div className="toast-region" role="status" aria-live="polite">
+      {message && <div className="toast">{message}</div>}
+    </div>
+  );
+}
+
+/** Replays the outbox on start, reconnect, return to the app and every 30 seconds. */
+function useSyncTriggers(): void {
+  const services = useServices();
+  useEffect(() => {
+    void services.cache.prune();
+    void syncNow(services);
+    let wasReachable = services.connectivity.get();
+    const onOnline = () => {
+      void syncNow(services);
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      invalidate(services);
+      void syncNow(services);
+    };
+    const unsubscribe = services.connectivity.subscribe(() => {
+      const reachable = services.connectivity.get();
+      if (reachable === true && wasReachable === false) void syncNow(services);
+      wasReachable = reachable;
+    });
+    const interval = setInterval(() => {
+      void syncNow(services);
+    }, SYNC_INTERVAL_MS);
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      unsubscribe();
+      clearInterval(interval);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [services]);
+}
+
+function routeKey(route: Route): string {
+  return route.name === 'book' ? `book:${route.id}` : route.name;
+}
+
+function Screen({ route }: { route: Route }) {
+  switch (route.name) {
+    case 'today':
+      return <Today />;
+    case 'library':
+      return <Library />;
+    case 'add':
+      return <AddBook />;
+    case 'book':
+      return <BookDetailScreen bookId={route.id} />;
+    case 'log':
+      return <LogSession bookId={route.bookId} fromTimer={route.fromTimer} />;
+    case 'calendar':
+      return <CalendarScreen month={route.month} />;
+    case 'stats':
+      return <Stats />;
+    case 'settings':
+      return <Settings />;
+    case 'notFound':
+      return <NotFound path={route.path} />;
+  }
+}
+
+function Shell() {
+  const route = useRoute();
+  const key = routeKey(route);
+  const previousKey = useRef<string | null>(null);
+  useSyncTriggers();
+
+  // Move focus to the new screen's heading on navigation (not on first load).
+  useEffect(() => {
+    if (previousKey.current !== null && previousKey.current !== key) {
+      window.scrollTo(0, 0);
+      document.querySelector<HTMLElement>('[data-screen-title]')?.focus();
+    }
+    previousKey.current = key;
+  }, [key]);
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1rem' }}>
-      <h1>Bookshelf</h1>
-      {state.kind === 'loading' && <p role="status">Checking server…</p>}
-      {state.kind === 'ok' && <p role="status">Server online (version {state.health.version}).</p>}
-      {state.kind === 'error' && <p role="alert">Server unreachable: {state.message}</p>}
-    </main>
+    <div className="app">
+      <OfflineBanner />
+      <main className="main" id="main">
+        <Suspense fallback={<Loading />}>
+          <Screen key={key} route={route} />
+        </Suspense>
+      </main>
+      <Toast />
+      <TabBar active={tabFor(route)} />
+    </div>
   );
 }

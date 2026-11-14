@@ -23,7 +23,7 @@ iPhone Safari (PWA) ──HTTPS──> tailscale serve (Mac) ──HTTP──> 1
 - **Database**: `node:sqlite` (`DatabaseSync`), WAL mode, foreign keys on. Schema managed by ordered, forward-only SQL migrations in `server/migrations/NNNN_name.sql`, tracked in a `schema_migrations` table. A migration never drops user data.
 - **Web**: Vite + React + TypeScript, `vite-plugin-pwa` (service worker, manifest, icons), Recharts for charts, hand-written calendar grid, hand-written hash router (no router dependency).
 - **Shared**: `shared/` holds Zod schemas and TypeScript types used by both server and web; the API contract lives there.
-- **Offline**: the service worker caches the app shell. Mutations made while the server is unreachable are written to a Dexie (IndexedDB) outbox and replayed to `POST /api/sync` when reachable. Book lookup/search requires connectivity.
+- **Offline**: the service worker caches the app shell. Mutations made while the server is unreachable are written to a Dexie (IndexedDB) outbox and replayed to `POST /api/sync` when reachable. Book lookup/search requires connectivity. Details in §6.1 and ADR 0007.
 - **Data directory**: `BOOKSHELF_DATA_DIR`, default `~/Library/Application Support/Bookshelf/` containing `bookshelf.db`, `covers/`, `backups/`.
 - **Config**: environment variables loaded from `.env` in the repo root (gitignored; `.env.example` committed). Never log secrets.
 
@@ -118,6 +118,8 @@ Conventions:
 
 ## 6. Screens (mobile-first, safe-area aware, light/dark)
 
+Layout: a bottom tab bar (Today, Library, Calendar, Stats, Settings) with Add book reached from Today and Library; hand-written hash routes (`#/`, `#/library`, `#/add`, `#/books/:id`, `#/log?book=:id&timer=1`, `#/calendar?month=YYYY-MM`, `#/stats`, `#/settings`). iPhone standalone mode: `env(safe-area-inset-*)` padding, 44pt touch targets, 16px inputs (no zoom on focus), no horizontal scroll at 320px+, system fonts, light/dark palettes as CSS custom properties with WCAG AA contrast. Dates show `DD/MM/YYYY` in the **device's** timezone (the server buckets days in `BOOKSHELF_TZ`; keep them the same). Every chart has a text summary and a data table; chart colours are validated for colour-vision deficiency and no chart uses two y-axes.
+
 1. **Today** — active timer (start/pause/stop), currently reading with progress bars and estimated finish, today's minutes vs daily goal, streak.
 2. **Library** — shelves (Reading, To read, Finished, Did not finish), filter by tag, search; add book.
 3. **Add book** — scan barcode (camera via `zxing-wasm`), type ISBN, or search title/author; pick a candidate; confirm formats & lengths; or enter manually.
@@ -126,6 +128,25 @@ Conventions:
 6. **Calendar** — month grid; each day shows covers of books with sessions; tap a day for its sessions.
 7. **Stats** — range picker (week/month/year/all), daily minutes bar chart, pages/percent trend, breakdown by format/genre/tag/author, reading speed, goals progress, year in review.
 8. **Settings** — goals, tags, backup (export JSON via share sheet/download, import JSON, Notion sync + status), server status, offline outbox status.
+
+Behaviour decided in phase 2:
+
+- **Today**: elapsed time is always derived from the timer's timestamps (`accumulatedSeconds` + now − `resumedAt`), never from a counting interval, so it survives the app being closed. "Stop & log" opens Log session prefilled from a fresh `GET /api/timer` (`startedAt`, `serverTime` as the end, `elapsedSeconds` as the duration; offline, from the cached timer at the current time); the timer is discarded (`DELETE /api/timer`, 404 ignored) after the session is saved. Estimated finish comes from each reading book's detail. Today's minutes come from `stats/daily` for today.
+- **Library**: the full list is loaded once (cached for offline use) and filtered on the device: shelves by status, a tag filter, and search (title, subtitle, authors, ISBNs; case- and accent-insensitive). Searching spans all shelves.
+- **Add book**: Scan (rear camera, EAN-13 978/979 only, decoded by zxing-wasm whose `.wasm` is served from our origin), ISBN (ISBN-10/13 validated with `normaliseIsbn`), Search (20 per page, "More results"), or Manual. 404 and upstream errors offer manual entry prefilled with the ISBN. The confirm step edits the metadata, chooses formats with page counts / audiobook length (`h:mm:ss`), the shelf, and warns when the ISBN is already in the library. Candidate covers in search results load from the lookup source's URL (the only third-party request, made only while searching); saved books always use `coverSrc`. Lookups and creating books need the server.
+- **Book detail**: status and rating (`<select>`, ½-star steps) and notes/quotes work offline; tags, formats (edit length, add, remove), reread (`POST /reads`, shown when no read is in progress), session deletion and book deletion need the server. The progress chart plots the current read's sessions with a known percent (shown from two sessions).
+- **Log session**: book (when not given), format, timing as "Start & end" (duration follows end − start until edited, so breaks can be subtracted) or "Duration" (end = start + duration), progress in the natural unit (pages, or `h:mm:ss` for audiobooks) with a toggle to %, converting the values; start value prefilled from current progress. Always sends an explicit `startValue` and a client-generated `id`.
+- **Calendar**: Monday-first month grid; days with sessions show up to three tiny covers (+N) and are buttons; tapping one lists that day's sessions (`GET /api/sessions?from=day&to=day`).
+- **Stats**: Week = last 7 days, Month = last 30 days, Year = 1 January to today, All time = no summary bounds and the last 3660 days of daily data. Year and All time group the daily series by month. Separate single-series bar charts for minutes, pages and percent; breakdowns show the top 8 by time. Year in review offers the last 10 years.
+- **Settings**: goals for this year's books/pages and minutes per day (`PUT /api/goals/:id`, reporting created vs updated), tag create/rename/recolour/delete, backup export (share sheet when files can be shared, else a download named `bookshelf-backup-YYYY-MM-DD.json`), import (validated on the device against the backup schema, confirmed, then `POST /api/backup/import`), Notion sync (button disabled with a progress message while running) and status, server status (`/api/health`), and the outbox: pending/failed counts, last attempt, "Sync now", and per-change Retry (failed) / Discard.
+
+### 6.1 Offline behaviour (ADR 0004, ADR 0007)
+
+- **Server unreachable** means `fetch` failed, or a proxy answered 502–504 without the API's error envelope (e.g. `tailscale serve` while the Mac server is down). A 502 with an envelope (`upstream_error`) is a normal error.
+- **Read model**: the last good response of every resource is kept in IndexedDB and shown immediately while refreshing; offline, screens render from it. Values are re-validated with their schema when read; entries older than 90 days are pruned at start-up. API responses are never cached by the service worker; covers have a same-origin runtime cache.
+- **Offline writes**: session logging, timer start/pause/resume/discard, book status and rating, and note/quote create/edit/delete. Each is queued as full records in dependency order (book → read → session). Because sync never opens reads, the client mirrors the §4 bookkeeping: it creates the read row itself (next number, starting at the session start), moves a read's start back for a retrospective session, re-shelves `to_read` books as `reading`, and opens/closes reads on status changes. The projected result is written to the read model.
+- **Replay**: before any online write, on start-up, on the `online` event, when the app becomes visible, when the server becomes reachable again, every 30 seconds while ops are pending, and from Settings → Sync now. Batches of up to 500 ops, in order, single-flight. `applied`/`stale` ops are removed; `not_found` is retried indefinitely (a parent may still be on its way); any other error is retried until it has failed 3 times in a row, then the op is marked failed, no longer sent, and surfaced (banner + Settings) for Retry or Discard.
+- An offline banner shows when the server is unreachable, with the pending count; failed changes link to Settings. Book lookup/search and other online-only actions say they need a connection.
 
 ## 7. Backups
 
@@ -145,9 +166,10 @@ Bookpine export and Notion database import are **pending sample files** from the
 - `npm run dev` — server (watch) + Vite dev server with `/api` proxy.
 - `npm run build` — type-check + build web into `web/dist`.
 - `npm start` — production server serving `web/dist`.
+- PWA: `vite-plugin-pwa` generates `manifest.webmanifest` (name "Bookshelf", `display: standalone`, `start_url: /`, theme colours, 192/512/maskable-512 icons) and a Workbox service worker (`sw.js`, auto-update) that precaches the built assets including the zxing `.wasm`, falls back to `index.html` for navigations except `/api/*`, and runtime-caches `/api/covers/*`. `index.html` carries the iOS tags (`apple-mobile-web-app-capable`, status-bar style, title, `apple-touch-icon`). Icons are generated by `npm run icons` (`scripts/generate-icons.ts`, Node built-ins only) and committed in `web/public/`.
 - launchd agent (`ops/com.bookshelf.server.plist`, installed by `npm run service:install`) starts the server at login and restarts it on failure; logs to `BOOKSHELF_DATA_DIR/logs/`.
 - Tailscale: `tailscale serve --bg 4380` exposes `https://<mac-name>.<tailnet>.ts.net` to the user's devices only. Documented in README.
 
 ## 10. Quality gates
 
-`npm run check` = ESLint + Prettier check + `tsc --noEmit` (server, shared, web) + Vitest (server API integration tests against a temp SQLite DB with external HTTP mocked; shared derivation unit tests; web component tests with Testing Library + jsdom; outbox tests with fake-indexeddb). Target ~90% line coverage on `shared/` and `server/` (enforced as a Vitest threshold). No external network in tests: `fetch` is injected and mocked; the only real socket is a loopback boot test of `server/index.ts`. Tests never touch the real data directory.
+`npm run check` = ESLint + Prettier check + `tsc --noEmit` (server, shared, web) + Vitest (server API integration tests against a temp SQLite DB with external HTTP mocked; shared derivation unit tests; web component tests with Testing Library + jsdom; outbox tests with fake-indexeddb). Target ~90% line coverage on `shared/`, `server/`, `scripts/` and `web/src/` (each enforced as a Vitest threshold). No external network in tests: `fetch` is injected and mocked; the only real socket is a loopback boot test of `server/index.ts`. Tests never touch the real data directory.

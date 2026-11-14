@@ -39,6 +39,7 @@ export default defineConfig({
         'server/**/*.ts': { lines: 90 },
         'shared/**/*.ts': { lines: 90 },
         'scripts/**/*.ts': { lines: 90 },
+        'web/src/**/*.{ts,tsx}': { lines: 90 },
       },
     },
   },
