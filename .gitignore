@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+web/dist/
+
+# Environment (secrets)
+.env
+.env.*
+!.env.example
+
+# Test output
+coverage/
+
+# Local data directories (never commit user data)
+data/
+*.db
+*.db-shm
+*.db-wal
+backups/
+covers/
+
+# OS / editor
+.DS_Store
+*.log
