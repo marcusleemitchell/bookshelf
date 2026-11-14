@@ -24,7 +24,15 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['server/**/*.ts', 'shared/**/*.ts', 'web/src/**/*.{ts,tsx}'],
-      exclude: ['**/*.test.{ts,tsx}', 'server/test/**', 'web/src/test/**', 'web/src/main.tsx'],
+      // Entry points run in their own process (server/index.test.ts boots it) or
+      // only mount the app, so in-process coverage cannot see them.
+      exclude: [
+        '**/*.test.{ts,tsx}',
+        'server/test/**',
+        'server/index.ts',
+        'web/src/test/**',
+        'web/src/main.tsx',
+      ],
       reporter: ['text-summary', 'text', 'html'],
       thresholds: {
         'server/**/*.ts': { lines: 90 },
