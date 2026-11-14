@@ -4,19 +4,32 @@ import {
   bookCandidateSchema,
   type BookCandidate,
 } from '../../shared/index.ts';
-import { cleanGenres, htmlToText, mergeCandidates } from '../services/lookup.ts';
+import {
+  cleanDescription,
+  cleanGenres,
+  htmlToText,
+  mergeCandidates,
+  normalisePublishedDate,
+} from '../services/lookup.ts';
 import {
   GOOGLE_EMPTY_RESPONSE,
   GOOGLE_ISBN_RESPONSE,
   GOOGLE_SEARCH_RESPONSE,
+  OL_EDITION_FOX,
+  OL_EDITION_PRIDE,
+  OL_ISBN_PRIDE,
   OL_ISBN_RESPONSE,
+  OL_SEARCH_EDITIONS_RESPONSE,
   OL_SEARCH_EMPTY,
   OL_SEARCH_RESPONSE,
+  OL_WORK_FOX,
 } from '../test/fixtures/lookup.ts';
 import { createTestEnv, json, type TestEnv } from '../test/helpers.ts';
 
 const OL_BOOKS = 'https://openlibrary.org/api/books';
 const OL_SEARCH = 'https://openlibrary.org/search.json';
+const OL_EDITION = (id: string) => `https://openlibrary.org/books/${id}.json`;
+const OL_WORK = (id: string) => `https://openlibrary.org/works/${id}.json`;
 const GOOGLE = 'https://www.googleapis.com/books/v1/volumes';
 
 let env: TestEnv;
@@ -34,6 +47,8 @@ describe('GET /api/lookup/isbn/:isbn', () => {
   it('normalises the ISBN, uses Open Library and fills gaps from Google Books', async () => {
     setup({ googleBooksApiKey: 'gb-secret-key' });
     env.fetchMock.on(OL_BOOKS, () => json(OL_ISBN_RESPONSE));
+    // The edition has a language but neither it nor a work has a description.
+    env.fetchMock.on(OL_EDITION('OL7353617M'), () => json({ ...OL_EDITION_FOX, works: undefined }));
     env.fetchMock.on(GOOGLE, () => json(GOOGLE_ISBN_RESPONSE));
 
     const res = await env.request<BookCandidate>('GET', '/api/lookup/isbn/0-14-032872-6');
@@ -45,8 +60,8 @@ describe('GET /api/lookup/isbn/:isbn', () => {
       subtitle: null,
       authors: ['Roald Dahl'],
       publisher: 'Puffin',
-      publishedDate: 'October 1, 1988',
-      language: 'en',
+      publishedDate: '1988-10-01',
+      language: 'eng',
       synopsis:
         'The Boggis, Bunce and Bean are three very nasty farmers.\n\nMr Fox outwits them & survives.\nThe end.',
       coverUrl: 'https://covers.openlibrary.org/b/id/8739161-L.jpg',
@@ -56,13 +71,69 @@ describe('GET /api/lookup/isbn/:isbn', () => {
       pageCount: 96,
     });
 
-    const [olCall, googleCall] = env.fetchMock.calls;
+    const [olCall, editionCall, googleCall] = env.fetchMock.calls;
     expect(olCall?.url).toContain('bibkeys=ISBN%3A9780140328721%2CISBN%3A0140328726');
+    expect(editionCall?.url).toBe(OL_EDITION('OL7353617M'));
     expect(olCall?.url).toContain('jscmd=data');
     expect(googleCall?.url).toContain('q=isbn%3A9780140328721');
     expect(googleCall?.url).toContain('key=gb-secret-key');
     // The API key never reaches the logs.
     expect(JSON.stringify(env.logs)).not.toContain('gb-secret-key');
+  });
+
+  it('takes the synopsis and language from the Open Library edition (no key needed)', async () => {
+    setup();
+    env.fetchMock.on(OL_BOOKS, () => json(OL_ISBN_PRIDE));
+    env.fetchMock.on(OL_EDITION('OL37076991M'), () => json(OL_EDITION_PRIDE));
+    const res = await env.request<BookCandidate>('GET', '/api/lookup/isbn/9780141439518');
+    expect(res.status).toBe(200);
+    expect(bookCandidateSchema.parse(res.body)).toMatchObject({
+      source: 'openlibrary',
+      sourceId: 'OL37076991M',
+      title: 'Pride and Prejudice',
+      publishedDate: '2003',
+      language: 'eng',
+      synopsis:
+        'When Elizabeth Bennet first meets eligible bachelor Fitzwilliam Darcy, she thinks him arrogant and conceited. In the sparkling comedy of manners that follows, Jane Austen shows the folly of judging by first impressions.',
+      pageCount: 435,
+      coverUrl: 'https://covers.openlibrary.org/b/id/12645114-L.jpg',
+    });
+    // Nothing left to fill, so neither the work nor Google Books is asked.
+    expect(env.fetchMock.calls.map((c) => c.url.split('?')[0])).toEqual([
+      OL_BOOKS,
+      OL_EDITION('OL37076991M'),
+    ]);
+  });
+
+  it('falls back to the Open Library work description', async () => {
+    setup();
+    env.fetchMock.on(OL_BOOKS, () => json(OL_ISBN_RESPONSE));
+    env.fetchMock.on(OL_EDITION('OL7353617M'), () => json(OL_EDITION_FOX));
+    env.fetchMock.on(OL_WORK('OL45804W'), () => json(OL_WORK_FOX));
+    const res = await env.request<BookCandidate>('GET', '/api/lookup/isbn/9780140328721');
+    expect(res.body.synopsis).toBe(
+      'The main character of Fantastic Mr. Fox is an extremely clever anthropomorphized fox named Mr. Fox. He lives with his wife and four little foxes.\n\nFinally tired of being constantly outwitted by Mr. Fox, the farmers attempt to capture and kill him.',
+    );
+    expect(res.body.language).toBe('eng');
+    expect(env.fetchMock.calls).toHaveLength(3);
+  });
+
+  it('keeps the Open Library record when its edition or work cannot be read', async () => {
+    setup();
+    env.fetchMock.on(OL_BOOKS, () => json(OL_ISBN_RESPONSE));
+    env.fetchMock.on(OL_EDITION('OL7353617M'), () => new Response('', { status: 503 }));
+    env.fetchMock.on(GOOGLE, () => json(GOOGLE_EMPTY_RESPONSE));
+    const res = await env.request<BookCandidate>('GET', '/api/lookup/isbn/9780140328721');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ title: 'Fantastic Mr. Fox', synopsis: null, language: null });
+    expect(
+      env.logs.some((l) => l['msg'] === 'Lookup source failed' && l['source'] === 'openlibrary'),
+    ).toBe(true);
+
+    env.fetchMock.on(OL_EDITION('OL7353617M'), () => json(OL_EDITION_FOX));
+    env.fetchMock.on(OL_WORK('OL45804W'), () => json({ key: '/works/OL45804W', description: 7 }));
+    const malformedWork = await env.request<BookCandidate>('GET', '/api/lookup/isbn/9780140328721');
+    expect(malformedWork.body).toMatchObject({ synopsis: null, language: 'eng' });
   });
 
   it('falls back to Google Books when Open Library has no record', async () => {
@@ -152,7 +223,8 @@ describe('GET /api/lookup/search', () => {
         authors: ['Frank Herbert'],
         publisher: 'Ace Books',
         publishedDate: '1965',
-        language: 'eng',
+        // Several languages across editions and no best edition: unknown.
+        language: null,
         synopsis: null,
         coverUrl: 'https://covers.openlibrary.org/b/id/11481354-L.jpg',
         isbn10: '0441172717',
@@ -181,6 +253,38 @@ describe('GET /api/lookup/search', () => {
     expect(url.searchParams.get('q')).toBe('dune');
     expect(url.searchParams.get('page')).toBe('2');
     expect(url.searchParams.get('limit')).toBe('20');
+    expect(url.searchParams.get('lang')).toBe('en');
+    expect(url.searchParams.get('fields')).toContain('editions.isbn');
+  });
+
+  it("describes Open Library's best edition rather than an arbitrary one", async () => {
+    setup();
+    env.fetchMock.on(OL_SEARCH, () => json(OL_SEARCH_EDITIONS_RESPONSE));
+    const res = await env.request<BookCandidate[]>('GET', '/api/lookup/search?q=osman');
+    expect(bookCandidateListSchema.parse(res.body)).toMatchObject([
+      {
+        sourceId: 'OL28804417W',
+        title: 'The Last Devil to Die',
+        isbn13: '9780241512449',
+        isbn10: '0241512441',
+        language: 'eng',
+        publisher: 'Penguin Books, Limited',
+        publishedDate: '2023',
+        coverUrl: 'https://covers.openlibrary.org/b/id/14421360-L.jpg',
+        pageCount: 422,
+      },
+      {
+        sourceId: 'OL66554W',
+        title: 'Pride and Prejudice',
+        // The best edition has no ISBN; another edition's ISBN would be wrong.
+        isbn13: null,
+        isbn10: null,
+        language: 'eng',
+        publisher: 'LibriVox',
+        publishedDate: '2007-11-26',
+        coverUrl: 'https://covers.openlibrary.org/b/id/8090214-L.jpg',
+      },
+    ]);
   });
 
   it('falls back to Google Books when Open Library finds nothing', async () => {
@@ -227,6 +331,49 @@ describe('GET /api/lookup/search', () => {
 });
 
 describe('lookup helpers', () => {
+  it('normalises published dates to YYYY, YYYY-MM or YYYY-MM-DD when recognisable', () => {
+    const cases: [string | undefined, string | null][] = [
+      [undefined, null],
+      ['  ', null],
+      ['2003', '2003'],
+      ['2015-04-30', '2015-04-30'],
+      ['2015-04', '2015-04'],
+      ['May 04, 2021', '2021-05-04'],
+      ['October 1, 1988', '1988-10-01'],
+      ['Sept. 3, 2019', '2019-09-03'],
+      ['4 May 2021', '2021-05-04'],
+      ['April 2015', '2015-04'],
+      ['Apr 2015', '2015-04'],
+      ['c1995', '1995'],
+      ['[2003]', '2003'],
+      ['2003.', '2003'],
+      ['February 30, 2020', 'February 30, 2020'],
+      ['2015-13-01', '2015-13-01'],
+      ['1990s', '1990s'],
+      ['between 1920 and 1925', 'between 1920 and 1925'],
+    ];
+    for (const [raw, expected] of cases) {
+      expect(normalisePublishedDate(raw), String(raw)).toBe(expected);
+    }
+  });
+
+  it('cleans Open Library descriptions', () => {
+    expect(cleanDescription('A tale.\r\n\r\nThe end.\r\n')).toBe('A tale.\n\nThe end.');
+    expect(cleanDescription('Blurb text.\n--back cover')).toBe('Blurb text.');
+    expect(cleanDescription('Blurb text. --')).toBe('Blurb text.');
+    expect(
+      cleanDescription(
+        'A novel ([source][1])\n\n[1]: https://en.wikipedia.org/wiki/Novel\n\n\n\nMore.',
+      ),
+    ).toBe('A novel\n\nMore.');
+    expect(cleanDescription('Box set.\n\n----------\n**Contains**\n\n- [Book one]')).toBe(
+      'Box set.',
+    );
+    expect(cleanDescription('Dashes -- inside are kept.')).toBe('Dashes -- inside are kept.');
+    expect(cleanDescription(' -- ')).toBeNull();
+    expect(cleanDescription(undefined)).toBeNull();
+  });
+
   it('cleans genres', () => {
     expect(
       cleanGenres([

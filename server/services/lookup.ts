@@ -1,6 +1,7 @@
 /**
- * Book lookup (SPEC §5): Open Library first, Google Books as fallback and
- * gap-filler, both normalised into `BookCandidate`s. Upstream payloads are
+ * Book lookup (SPEC §5): Open Library first (its edition and work records
+ * supply synopsis and language), Google Books as fallback and gap-filler
+ * (ADR 0005, ADR 0008), all normalised into `BookCandidate`s. Upstream payloads are
  * parsed defensively; anything malformed is dropped rather than trusted.
  */
 import { z } from 'zod';
@@ -18,6 +19,8 @@ import { fetchJson, OutboundError } from './outbound.ts';
 export const OPEN_LIBRARY_BASE = 'https://openlibrary.org';
 export const GOOGLE_BOOKS_BASE = 'https://www.googleapis.com/books/v1';
 export const SEARCH_PAGE_SIZE = 20;
+/** Edition language Open Library search prefers (ISO 639-1). */
+export const SEARCH_LANGUAGE = 'en';
 const MAX_GENRES = 8;
 
 // --- Upstream payload shapes (only the fields we use) ----------------------
@@ -50,6 +53,29 @@ const olBookSchema = z.object({
 });
 const olBooksResponseSchema = z.record(z.string(), z.unknown());
 
+/** Open Library text fields are either strings or `{ type: '/type/text', value }`. */
+const olTextSchema = z.union([
+  z.string(),
+  z.object({ value: z.string() }).transform((text) => text.value),
+]);
+const olKeySchema = z.object({ key: z.string() });
+
+const olEditionSchema = z.object({
+  description: olTextSchema.optional(),
+  languages: z.array(olKeySchema).optional(),
+  works: z.array(olKeySchema).optional(),
+});
+const olWorkSchema = z.object({ description: olTextSchema.optional() });
+
+/** The best-matching edition Open Library search returns for a work (`editions.*` fields). */
+const olSearchEditionSchema = z.object({
+  isbn: z.array(z.string()).optional(),
+  language: z.array(z.string()).optional(),
+  publisher: z.array(z.string()).optional(),
+  publish_date: z.array(z.string()).optional(),
+  cover_i: z.number().optional(),
+});
+
 const olSearchDocSchema = z.object({
   key: z.string(),
   title: z.string(),
@@ -62,6 +88,7 @@ const olSearchDocSchema = z.object({
   publisher: z.array(z.string()).optional(),
   language: z.array(z.string()).optional(),
   subject: z.array(z.string()).optional(),
+  editions: z.object({ docs: z.array(z.unknown()).default([]) }).optional(),
 });
 const olSearchResponseSchema = z.object({ docs: z.array(z.unknown()).default([]) });
 
@@ -112,6 +139,85 @@ export function cleanGenres(raw: readonly string[]): string[] {
     if (genres.length >= MAX_GENRES) break;
   }
   return genres;
+}
+
+const MONTHS: Record<string, number> = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  sept: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
+};
+
+function monthNumber(name: string): number | null {
+  const key = name.toLowerCase().replace(/\.$/, '');
+  return MONTHS[key] ?? MONTHS[key.slice(0, 3)] ?? null;
+}
+
+function isoDate(year: string, month: number, day?: number): string | null {
+  const mm = String(month).padStart(2, '0');
+  if (day === undefined) return `${year}-${mm}`;
+  const date = new Date(Date.UTC(Number(year), month - 1, day));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${year}-${mm}-${String(day).padStart(2, '0')}`;
+}
+
+/**
+ * Normalises an upstream publication date to `YYYY`, `YYYY-MM` or
+ * `YYYY-MM-DD` when it is recognisable ("May 04, 2021", "4 May 2021",
+ * "April 2015", "c1995", "[2003]"); anything else is kept as given.
+ */
+export function normalisePublishedDate(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  if (/^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$/.test(value)) return value;
+  const year = /^[c[]?(\d{4})[\].]?$/.exec(value);
+  if (year?.[1]) return year[1];
+  const monthDayYear = /^([A-Za-z]+\.?) (\d{1,2}),? (\d{4})$/.exec(value);
+  if (monthDayYear?.[1] && monthDayYear[2] && monthDayYear[3]) {
+    const month = monthNumber(monthDayYear[1]);
+    if (month) return isoDate(monthDayYear[3], month, Number(monthDayYear[2])) ?? value;
+  }
+  const dayMonthYear = /^(\d{1,2}) ([A-Za-z]+\.?),? (\d{4})$/.exec(value);
+  if (dayMonthYear?.[1] && dayMonthYear[2] && dayMonthYear[3]) {
+    const month = monthNumber(dayMonthYear[2]);
+    if (month) return isoDate(dayMonthYear[3], month, Number(dayMonthYear[1])) ?? value;
+  }
+  const monthYear = /^([A-Za-z]+\.?),? (\d{4})$/.exec(value);
+  if (monthYear?.[1] && monthYear[2]) {
+    const month = monthNumber(monthYear[1]);
+    if (month) return isoDate(monthYear[2], month);
+  }
+  return value;
+}
+
+/**
+ * Tidies an Open Library description: CRLF line breaks, markdown source
+ * links (`([source][1])` + `[1]: url`), "Contains" appendices after a rule,
+ * and trailing attributions such as `--back cover` or a bare `--`.
+ */
+export function cleanDescription(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  const [main = ''] = raw.replace(/\r\n?/g, '\n').split(/\n-{5,}\n/);
+  const cleaned = main
+    .replace(/\s*\(\[source\]\[\d+\]\)/gi, '')
+    .replace(/^[ \t]*\[\d+\]:[ \t]*\S+.*$/gm, '')
+    .replace(
+      /\s*-{2,}\s*(back cover|front cover|front flap|inside flap|jacket|publisher)?\s*$/i,
+      '',
+    )
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned || null;
 }
 
 /** Converts simple HTML (as found in Google Books descriptions) to plain text. */
@@ -166,7 +272,7 @@ export function fromOpenLibraryBook(raw: unknown): BookCandidate | null {
     subtitle: text(book.subtitle),
     authors: (book.authors ?? []).map((author) => author.name.trim()).filter(Boolean),
     publisher: text(book.publishers?.[0]?.name),
-    publishedDate: text(book.publish_date),
+    publishedDate: normalisePublishedDate(book.publish_date),
     language: null,
     synopsis: null,
     coverUrl: httpsUrl(book.cover?.large ?? book.cover?.medium ?? book.cover?.small),
@@ -181,19 +287,33 @@ export function fromOpenLibrarySearchDoc(raw: unknown): BookCandidate | null {
   const parsed = olSearchDocSchema.safeParse(raw);
   if (!parsed.success) return null;
   const doc = parsed.data;
+  // Edition-level fields come from Open Library's best-matching edition. The
+  // work-level lists mix every edition (any ISBN, any language), so they are
+  // only used when no edition came back, and a language only when unambiguous.
+  const editionResult = olSearchEditionSchema.safeParse(doc.editions?.docs[0]);
+  const edition = editionResult.success ? editionResult.data : null;
+  const isbns = edition ? edition.isbn : doc.isbn;
+  const language = edition
+    ? edition.language?.[0]
+    : doc.language?.length === 1
+      ? doc.language[0]
+      : undefined;
+  const coverId = edition?.cover_i ?? doc.cover_i;
   return finalise({
     source: 'openlibrary',
     sourceId: doc.key.split('/').pop() ?? doc.key,
     title: doc.title.trim(),
     subtitle: text(doc.subtitle),
     authors: doc.author_name ?? [],
-    publisher: text(doc.publisher?.[0]),
-    publishedDate: doc.first_publish_year ? String(doc.first_publish_year) : null,
-    language: text(doc.language?.[0]),
+    publisher: text(edition ? edition.publisher?.[0] : doc.publisher?.[0]),
+    publishedDate:
+      normalisePublishedDate(edition?.publish_date?.[0]) ??
+      (doc.first_publish_year ? String(doc.first_publish_year) : null),
+    language: text(language),
     synopsis: null,
-    coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg` : null,
-    isbn10: firstValid(doc.isbn, isValidIsbn10),
-    isbn13: firstValid(doc.isbn, isValidIsbn13),
+    coverUrl: coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : null,
+    isbn10: firstValid(isbns, isValidIsbn10),
+    isbn13: firstValid(isbns, isValidIsbn13),
     genres: cleanGenres(doc.subject ?? []),
     pageCount: positiveInt(doc.number_of_pages_median),
   });
@@ -215,7 +335,7 @@ export function fromGoogleVolume(raw: unknown): BookCandidate | null {
     subtitle: text(info.subtitle),
     authors: info.authors ?? [],
     publisher: text(info.publisher),
-    publishedDate: text(info.publishedDate),
+    publishedDate: normalisePublishedDate(info.publishedDate),
     language: text(info.language),
     synopsis: text(description),
     coverUrl: httpsUrl(
@@ -281,6 +401,45 @@ async function openLibraryByIsbn(ctx: AppContext, isbn10: string | null, isbn13:
   return null;
 }
 
+/**
+ * Fills a missing synopsis and language from the Open Library edition record
+ * and, failing that, the work's description. Without a Google Books key this
+ * is the only synopsis source (ADR 0008). Failures keep the candidate as is.
+ */
+async function enrichFromOpenLibrary(
+  ctx: AppContext,
+  candidate: BookCandidate,
+): Promise<BookCandidate> {
+  if (!/^OL\d+M$/.test(candidate.sourceId)) return candidate;
+  if (candidate.synopsis !== null && candidate.language !== null) return candidate;
+  const edition = await attempt(ctx, 'openlibrary', async () =>
+    parseUpstream(
+      olEditionSchema,
+      await fetchJson(ctx, `${OPEN_LIBRARY_BASE}/books/${candidate.sourceId}.json`),
+      'Open Library',
+    ),
+  );
+  if (!edition.ok) return candidate;
+  const language = edition.value.languages?.[0]?.key.split('/').pop();
+  let synopsis = cleanDescription(edition.value.description);
+  const workKey = edition.value.works?.[0]?.key;
+  if (!synopsis && candidate.synopsis === null && workKey && /^\/works\/OL\d+W$/.test(workKey)) {
+    const work = await attempt(ctx, 'openlibrary', async () =>
+      parseUpstream(
+        olWorkSchema,
+        await fetchJson(ctx, `${OPEN_LIBRARY_BASE}${workKey}.json`),
+        'Open Library',
+      ),
+    );
+    if (work.ok) synopsis = cleanDescription(work.value.description);
+  }
+  return {
+    ...candidate,
+    synopsis: candidate.synopsis ?? synopsis,
+    language: candidate.language ?? text(language),
+  };
+}
+
 async function googleVolumes(ctx: AppContext, url: string): Promise<BookCandidate[]> {
   const body = parseUpstream(googleResponseSchema, await fetchJson(ctx, url), 'Google Books');
   return (body.items ?? [])
@@ -318,7 +477,7 @@ export async function lookupIsbn(ctx: AppContext, rawIsbn: string): Promise<Book
   const ol = await attempt(ctx, 'openlibrary', () =>
     openLibraryByIsbn(ctx, isbn.isbn10, isbn.isbn13),
   );
-  const olCandidate = ol.ok ? ol.value : null;
+  const olCandidate = ol.ok && ol.value ? await enrichFromOpenLibrary(ctx, ol.value) : null;
 
   let google: Outcome<BookCandidate[]> | null = null;
   if (!olCandidate || needsFilling(olCandidate)) {
@@ -357,8 +516,12 @@ export async function searchBooks(
     q,
     page: String(page),
     limit: String(SEARCH_PAGE_SIZE),
-    fields:
+    fields: [
       'key,title,subtitle,author_name,first_publish_year,isbn,cover_i,number_of_pages_median,publisher,language,subject',
+      'editions,editions.key,editions.isbn,editions.language,editions.publisher,editions.publish_date,editions.cover_i',
+    ].join(','),
+    // Prefer an English edition as each work's best edition (ISBN, publisher, language).
+    lang: SEARCH_LANGUAGE,
   });
   const ol = await attempt(ctx, 'openlibrary', async () => {
     const body = parseUpstream(

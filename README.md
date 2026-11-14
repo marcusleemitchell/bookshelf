@@ -163,15 +163,15 @@ When the camera can't be used the app explains why; type the ISBN instead. The b
 
 Settings are environment variables, read from `.env` in the repo root if present (variables already set in the environment win). `.env` is gitignored; `.env.example` lists everything. Invalid values stop the server at startup with a clear message.
 
-| Variable                | Default                                   | Purpose                                                                   |
-| ----------------------- | ----------------------------------------- | ------------------------------------------------------------------------- |
-| `PORT`                  | `4380`                                    | Server port. The server always binds to `127.0.0.1` (loopback only).      |
-| `BOOKSHELF_DATA_DIR`    | `~/Library/Application Support/Bookshelf` | Database, cover cache and backups. `~` is expanded.                       |
-| `BOOKSHELF_TZ`          | system timezone                           | IANA timezone (e.g. `Europe/London`) used to group sessions into days.    |
-| `LOG_LEVEL`             | `info`                                    | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stdout.        |
-| `GOOGLE_BOOKS_API_KEY`  | unset                                     | Optional; raises the Google Books quota for lookups.                      |
-| `NOTION_TOKEN`          | unset                                     | Notion internal integration secret. Set together with the next variable.  |
-| `NOTION_PARENT_PAGE_ID` | unset                                     | Notion page (ID or page URL) under which Bookshelf creates its databases. |
+| Variable                | Default                                   | Purpose                                                                                                      |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `PORT`                  | `4380`                                    | Server port. The server always binds to `127.0.0.1` (loopback only).                                         |
+| `BOOKSHELF_DATA_DIR`    | `~/Library/Application Support/Bookshelf` | Database, cover cache and backups. `~` is expanded.                                                          |
+| `BOOKSHELF_TZ`          | system timezone                           | IANA timezone (e.g. `Europe/London`) used to group sessions into days.                                       |
+| `LOG_LEVEL`             | `info`                                    | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stdout.                                           |
+| `GOOGLE_BOOKS_API_KEY`  | unset                                     | Optional. Google Books refuses keyless requests, so without a key lookups use Open Library only (see below). |
+| `NOTION_TOKEN`          | unset                                     | Notion internal integration secret. Set together with the next variable.                                     |
+| `NOTION_PARENT_PAGE_ID` | unset                                     | Notion page (ID or page URL) under which Bookshelf creates its databases.                                    |
 
 Secrets are never written to the logs.
 
@@ -256,6 +256,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 - [ADR 0005](docs/adr/0005-open-library-primary-google-fallback.md) — Open Library first, Google Books fallback
 - [ADR 0006](docs/adr/0006-notion-one-way-mirror.md) — Notion as a one-way mirror
 - [ADR 0007](docs/adr/0007-offline-read-model-and-client-bookkeeping.md) — offline read model in IndexedDB and client-side read bookkeeping
+- [ADR 0008](docs/adr/0008-open-library-records-for-synopsis.md) — Open Library edition and work records supply synopsis and language
 
 ## Roadmap
 
