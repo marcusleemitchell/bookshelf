@@ -182,6 +182,7 @@ const relation = (pageId: string | null) => ({ relation: pageId ? [{ id: pageId 
 const STATUS_LABELS: Record<BookStatus, string> = {
   to_read: 'To read',
   reading: 'Reading',
+  paused: 'Paused',
   finished: 'Finished',
   dnf: 'Did not finish',
 };

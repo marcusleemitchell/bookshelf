@@ -289,6 +289,37 @@ describe('GET/PATCH/DELETE /api/books/:id', () => {
     expect(abandoned.body.currentRead?.outcome).toBe('dnf');
   });
 
+  it('pauses a book keeping its read open, and resumes the same read', async () => {
+    const book = await addBook({ status: 'reading' });
+    const readId = book.currentRead?.id;
+    const paused = await env.request<BookDetail>('PATCH', `/api/books/${book.id}`, {
+      status: 'paused',
+    });
+    expect(paused.status).toBe(200);
+    expect(paused.body.status).toBe('paused');
+    expect(paused.body.reads).toHaveLength(1);
+    expect(paused.body.currentRead).toMatchObject({ id: readId, outcome: 'in_progress' });
+
+    const resumed = await env.request<BookDetail>('PATCH', `/api/books/${book.id}`, {
+      status: 'reading',
+    });
+    expect(resumed.body.reads).toHaveLength(1);
+    expect(resumed.body.currentRead?.id).toBe(readId);
+
+    // Pausing a book that has no read leaves it without one.
+    const unread = await addBook({ title: 'Unread', status: 'paused' });
+    expect(unread.reads).toHaveLength(0);
+    const listed = await env.request<BookListItem[]>('GET', '/api/books?status=paused');
+    expect(listed.body.map((b) => b.title)).toEqual(['Unread']);
+
+    // Finishing a paused book closes the open read.
+    await env.request('PATCH', `/api/books/${book.id}`, { status: 'paused' });
+    const finished = await env.request<BookDetail>('PATCH', `/api/books/${book.id}`, {
+      status: 'finished',
+    });
+    expect(finished.body.currentRead).toMatchObject({ id: readId, outcome: 'finished' });
+  });
+
   it('re-caches the cover when its URL changes and clears it when removed', async () => {
     env.fetchMock.on('https://covers.example.org/a', () => image());
     env.fetchMock.on('https://covers.example.org/b', () => image(PNG_BYTES, 'image/jpeg'));

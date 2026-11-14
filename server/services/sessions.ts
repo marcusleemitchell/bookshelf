@@ -76,7 +76,7 @@ function defaultDuration(startedAt: string, endedAt: string): number {
 
 /**
  * `POST /api/sessions`. Uses the given read, else the book's in-progress
- * read, else opens a new one. A `to_read` book becomes `reading`.
+ * read, else opens a new one. A `to_read` or `paused` book becomes `reading`.
  */
 export function createSession(ctx: AppContext, input: SessionCreateInput): Session {
   const at = nowIso(ctx);
@@ -139,7 +139,10 @@ export function createSession(ctx: AppContext, input: SessionCreateInput): Sessi
       deletedAt: null,
     };
     insertRow(ctx.db, sessionsTable, session);
-    if (book.status === 'to_read') saveBook(ctx.db, { ...book, status: 'reading', updatedAt: at });
+    // Logging reading puts a to-read or paused book (back) on the reading shelf.
+    if (book.status === 'to_read' || book.status === 'paused') {
+      saveBook(ctx.db, { ...book, status: 'reading', updatedAt: at });
+    }
     return session;
   });
 }

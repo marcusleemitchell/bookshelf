@@ -135,6 +135,17 @@ describe('POST /api/sync', () => {
     });
   });
 
+  it('replicates a paused book without touching its open read', async () => {
+    await seed();
+    const [result] = await sync(
+      op('book', bookPayload({ status: 'paused' }), '2026-11-14T11:00:00.000Z'),
+    );
+    expect(result?.status).toBe('applied');
+    const book = await getBook();
+    expect(book.status).toBe('paused');
+    expect(book.currentRead).toMatchObject({ id: READ_ID, outcome: 'in_progress' });
+  });
+
   it('is idempotent by opId', async () => {
     const first = op('book', bookPayload());
     expect(await sync(first)).toEqual([{ opId: first.opId, status: 'applied', duplicate: false }]);

@@ -153,7 +153,8 @@ export interface OfflinePlan {
 /**
  * Read bookkeeping for a status change, mirroring the REST API (SPEC §4):
  * `reading` opens a read if none is in progress; `finished`/`dnf` close the
- * in-progress read, or record a closed read when the book has none.
+ * in-progress read, or record a closed read when the book has none;
+ * `to_read` and `paused` leave reads alone (paused keeps the read open).
  */
 function statusReadChanges(
   detail: BookDetail,
@@ -240,7 +241,7 @@ export interface OfflineSessionPlan extends OfflinePlan {
  * Offline session logging, mirroring `POST /api/sessions` (SPEC §4): uses the
  * in-progress read, opening one when there is none (sync never opens reads);
  * moves the read's start back for a retrospective session; and moves a
- * `to_read` book to `reading`.
+ * `to_read` or `paused` book to `reading`.
  */
 export function planSession(
   detail: BookDetail,
@@ -251,7 +252,7 @@ export function planSession(
 ): OfflineSessionPlan {
   const ops: NewOp[] = [];
   let book = detail;
-  if (detail.status === 'to_read') {
+  if (detail.status === 'to_read' || detail.status === 'paused') {
     book = { ...detail, status: 'reading', updatedAt: at };
     ops.push({
       entity: 'book',

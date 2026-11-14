@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -31,6 +31,36 @@ function migrationsDir(files: Record<string, string>): string {
   return target;
 }
 
+/** A directory holding copies of the first `count` shipped migrations. */
+function shippedMigrationsUpTo(count: number): string {
+  const target = mkdtempSync(join(dir, 'shipped-'));
+  for (const file of readdirSync(MIGRATIONS_DIR).sort().slice(0, count)) {
+    copyFileSync(join(MIGRATIONS_DIR, file), join(target, file));
+  }
+  return target;
+}
+
+const T = '2026-11-01T10:00:00.000Z';
+
+/** Inserts a book with a format, read, session, tag, note and timer at schema version 1. */
+function seedVersion1(): void {
+  db.exec(`INSERT INTO books (id, title, authors, genres, source, status, rating, created_at, updated_at)
+      VALUES ('b1', 'Kindred', '["Octavia E. Butler"]', '[]', 'manual', 'reading', 4.5, '${T}', '${T}');
+    INSERT INTO book_formats (id, book_id, format, page_count, created_at, updated_at)
+      VALUES ('f1', 'b1', 'physical', 264, '${T}', '${T}');
+    INSERT INTO reads (id, book_id, number, started_at, outcome, created_at, updated_at)
+      VALUES ('r1', 'b1', 1, '${T}', 'in_progress', '${T}', '${T}');
+    INSERT INTO sessions (id, read_id, book_id, format_id, started_at, ended_at, duration_seconds,
+        progress_unit, start_value, end_value, start_percent, end_percent, created_at, updated_at)
+      VALUES ('s1', 'r1', 'b1', 'f1', '${T}', '${T}', 1800, 'pages', 0, 26, 0, 9.85, '${T}', '${T}');
+    INSERT INTO tags (id, name, name_key, created_at, updated_at) VALUES ('t1', 'Classics', 'classics', '${T}', '${T}');
+    INSERT INTO book_tags (book_id, tag_id, created_at) VALUES ('b1', 't1', '${T}');
+    INSERT INTO book_notes (id, book_id, kind, text, created_at, updated_at)
+      VALUES ('n1', 'b1', 'quote', 'Quoted line', '${T}', '${T}');
+    INSERT INTO active_timer (id, book_id, format_id, started_at, resumed_at, created_at, updated_at)
+      VALUES ('timer', 'b1', 'f1', '${T}', '${T}', '${T}', '${T}');`);
+}
+
 function tables(): string[] {
   return db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -41,7 +71,7 @@ function tables(): string[] {
 describe('migrate', () => {
   it('applies the shipped migrations to a fresh database', () => {
     const result = migrate(db, MIGRATIONS_DIR, () => new Date('2026-11-14T12:00:00.000Z'));
-    expect(result).toEqual({ applied: ['0001_initial'], version: 1 });
+    expect(result).toEqual({ applied: ['0001_initial', '0002_paused_status'], version: 2 });
     expect(tables()).toEqual([
       'active_timer',
       'book_formats',
@@ -59,9 +89,39 @@ describe('migrate', () => {
     ]);
     expect(db.prepare('SELECT * FROM schema_migrations').all()).toEqual([
       { version: 1, name: 'initial', applied_at: '2026-11-14T12:00:00.000Z' },
+      { version: 2, name: 'paused_status', applied_at: '2026-11-14T12:00:00.000Z' },
     ]);
     expect(db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+  });
+
+  it('upgrades a version 1 database without losing or changing rows', () => {
+    migrate(db, shippedMigrationsUpTo(1));
+    seedVersion1();
+    const before = db.prepare('SELECT * FROM books').all();
+    expect(migrate(db).applied).toContain('0002_paused_status');
+    expect(db.prepare('SELECT * FROM books').all()).toEqual(before);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 1 });
+    expect(db.prepare('SELECT book_id FROM book_tags').all()).toEqual([{ book_id: 'b1' }]);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'books'")
+        .all()
+        .map((row) => row['name'])
+        .sort(),
+    ).toEqual(['books_isbn13_idx', 'books_status_idx', 'sqlite_autoindex_books_1']);
+    // The new status is accepted; unknown ones are still refused.
+    db.exec("UPDATE books SET status = 'paused' WHERE id = 'b1'");
+    expect(() => {
+      db.exec("UPDATE books SET status = 'shelved' WHERE id = 'b1'");
+    }).toThrow(/CHECK/);
+    // Child rows still reference the rebuilt table.
+    expect(() => {
+      db.exec(
+        `INSERT INTO book_formats (id, book_id, format, created_at, updated_at) VALUES ('f2', 'missing', 'kindle', '${T}', '${T}')`,
+      );
+    }).toThrow(/FOREIGN KEY/);
   });
 
   it('is idempotent and applies only new migrations', () => {

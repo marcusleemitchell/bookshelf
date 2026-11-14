@@ -79,6 +79,22 @@ describe('planSession', () => {
     expect(plan.detail.progressPercent).toBe(12);
   });
 
+  it('resumes a paused book: back to reading in its open read', () => {
+    const format = leGuin().formats[0];
+    if (!format) throw new Error('fixture');
+    const plan = planSession(
+      leGuin({ status: 'paused' }),
+      format,
+      sessionInput(),
+      AT,
+      idSequence(500),
+    );
+    expect(plan.ops.map((o) => o.entity)).toEqual(['book', 'session']);
+    expectValidOps(plan.ops);
+    expect(plan.detail.status).toBe('reading');
+    expect(plan.session.readId).toBe(leGuin().currentRead?.id);
+  });
+
   it('starts a new read numbered after finished ones', () => {
     const book = hailMary();
     const format = book.formats[0];
@@ -165,8 +181,12 @@ describe('planBookPatch', () => {
     expect(already.ops.map((o) => o.entity)).toEqual(['book']);
   });
 
-  it('leaves reads alone for to_read and for finishing an already closed book', () => {
+  it('leaves reads alone for to_read, paused and finishing an already closed book', () => {
     expect(planBookPatch(leGuin(), { status: 'to_read' }, AT, idSequence()).ops).toHaveLength(1);
+    const paused = planBookPatch(leGuin(), { status: 'paused' }, AT, idSequence());
+    expect(paused.ops).toHaveLength(1);
+    expect(paused.detail.status).toBe('paused');
+    expect(paused.detail.currentRead?.outcome).toBe('in_progress');
     expect(
       planBookPatch(hailMary({ status: 'reading' }), { status: 'finished' }, AT, idSequence()).ops,
     ).toHaveLength(1);

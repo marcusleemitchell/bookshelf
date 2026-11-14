@@ -85,6 +85,24 @@ describe('POST /api/sessions', () => {
     });
   });
 
+  it('resumes a paused book in its open read when a session is logged', async () => {
+    const book = await addBook({ status: 'reading' });
+    const readId = book.currentRead?.id;
+    await env.request('PATCH', `/api/books/${book.id}`, { status: 'paused' });
+    const res = await logSession({
+      bookId: book.id,
+      formatId: formatId(book, 'physical'),
+      progressUnit: 'pages',
+      startValue: 0,
+      endValue: 20,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.readId).toBe(readId);
+    const detail = await env.request<BookDetail>('GET', `/api/books/${book.id}`);
+    expect(detail.body.status).toBe('reading');
+    expect(detail.body.reads).toHaveLength(1);
+  });
+
   it('defaults the start value to the current progress in the new unit', async () => {
     const book = await addBook();
     const first = await logSession({

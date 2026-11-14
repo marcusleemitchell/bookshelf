@@ -15,12 +15,19 @@ import {
 
 export const STATUS_LABELS: Record<BookStatus, string> = {
   reading: 'Reading',
+  paused: 'Paused',
   to_read: 'To read',
   finished: 'Finished',
   dnf: 'Did not finish',
 };
 
-export const STATUS_ORDER: readonly BookStatus[] = ['reading', 'to_read', 'finished', 'dnf'];
+export const STATUS_ORDER: readonly BookStatus[] = [
+  'reading',
+  'paused',
+  'to_read',
+  'finished',
+  'dnf',
+];
 
 export const FORMAT_LABELS: Record<FormatType, string> = {
   physical: 'Physical',

@@ -111,7 +111,7 @@ On the Mac itself, just open <http://127.0.0.1:4380> (or your `PORT`) in any bro
 Open Bookshelf from the Home Screen (or <http://127.0.0.1:4380> on the Mac). The tab bar has five screens:
 
 - **Today** — the reading timer (start, pause, resume, then **Stop & log** to turn it into a session), the books you're reading with progress and an estimated finish date, today's minutes against your daily goal, and your streak. The timer keeps running while the app is closed.
-- **Library** — shelves (Reading, To read, Finished, Did not finish), tag filter and search. **Add book** (also on Today) finds books by scanning the barcode, typing the ISBN, or searching by title/author, then lets you pick your formats (physical, Kindle, audiobook) and their lengths. Anything the services don't know can be entered manually.
+- **Library** — shelves (Reading, Paused, To read, Finished, Did not finish), tag filter and search. Pausing a book keeps its current read open (it leaves Today's list); logging a session or choosing Reading again resumes it. **Add book** (also on Today) finds books by scanning the barcode, typing the ISBN, or searching by title/author, then lets you pick your formats (physical, Kindle, audiobook) and their lengths. Anything the services don't know can be entered manually.
 - **Book detail** (tap a book) — shelf, rating, progress chart, sessions, notes and quotes, tags, formats and lengths, rereads, and the book's metadata.
 - **Log session** — from a book or the timer: format, when you read, and progress in pages, percent or audiobook position (`h:mm:ss`).
 - **Calendar** — each day shows the covers of what you read; tap a day for its sessions.

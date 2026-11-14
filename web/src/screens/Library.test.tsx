@@ -25,6 +25,23 @@ describe('Library', () => {
     expect(screen.getByText('No books here.')).toBeInTheDocument();
   });
 
+  it('has a Paused shelf, and paused books are not on Today’s currently reading list', async () => {
+    const pausedBook = toListItem(leGuin({ status: 'paused' }));
+    const { user } = renderApp({
+      hash: '#/library',
+      routes: { 'GET /api/books': ok([pausedBook]) },
+    });
+    await user.click(await screen.findByRole('tab', { name: 'Paused (1)' }));
+    expect(
+      screen.getByText('The Left Hand of Darkness', { selector: '.title' }),
+    ).toBeInTheDocument();
+    window.location.hash = '#/';
+    expect(await screen.findByRole('heading', { name: 'Currently reading' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'The Left Hand of Darkness' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('filters by tag and searches across shelves', async () => {
     const { user } = renderApp({ hash: '#/library' });
     await user.click(await screen.findByRole('button', { name: 'Book club' }));

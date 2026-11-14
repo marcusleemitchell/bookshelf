@@ -39,7 +39,11 @@ export const colourSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Expected a #r
 
 const optionalText = (max: number) => z.string().trim().max(max).nullable();
 
-export const bookStatusSchema = z.enum(['to_read', 'reading', 'finished', 'dnf']);
+/**
+ * `paused` keeps the in-progress read open (SPEC §4) but takes the book off
+ * the currently-reading list.
+ */
+export const bookStatusSchema = z.enum(['to_read', 'reading', 'paused', 'finished', 'dnf']);
 export const bookSourceSchema = z.enum(['openlibrary', 'googlebooks', 'manual']);
 export const formatTypeSchema = z.enum(['physical', 'kindle', 'audiobook']);
 export const readOutcomeSchema = z.enum(['in_progress', 'finished', 'dnf']);

@@ -161,6 +161,18 @@ describe('Notion mirror', () => {
     expect(JSON.stringify(env.logs)).not.toContain(TOKEN);
   });
 
+  it('mirrors a paused book with the Paused status option', async () => {
+    setup();
+    const { book } = await seed();
+    await env.request('PATCH', `/api/books/${book.id}`, { status: 'paused' });
+    await run();
+    expect(fake.databaseByTitle('Bookshelf Books')?.properties['Status']).toMatchObject({
+      select: { options: expect.arrayContaining([{ name: 'Paused' }]) as unknown },
+    });
+    const [bookPage] = fake.pagesIn('Bookshelf Books');
+    expect(bookPage?.properties['Status']).toEqual({ select: { name: 'Paused' } });
+  });
+
   it('skips unchanged rows, updates changed ones and archives deleted ones', async () => {
     setup();
     const { book, session } = await seed();

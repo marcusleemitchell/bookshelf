@@ -150,7 +150,8 @@ function insertRead(
  * Keeps reads consistent with a status set through the REST API:
  * `reading` opens a read if none is in progress; `finished`/`dnf` close the
  * in-progress read (or record a closed read when the book has none);
- * `to_read` leaves reads alone.
+ * `to_read` leaves reads alone, and so does `paused`, which keeps the
+ * in-progress read open so resuming continues it.
  */
 export function applyStatusToReads(db: Db, bookId: string, status: BookStatus, at: string): void {
   const current = inProgressRead(db, bookId);

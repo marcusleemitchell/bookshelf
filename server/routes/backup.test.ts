@@ -7,6 +7,7 @@ import {
   type BackupImportResponse,
   type BookDetail,
 } from '../../shared/index.ts';
+import { loadMigrations } from '../db/migrate.ts';
 import { pruneSnapshots, SNAPSHOTS_TO_KEEP, writeSnapshot } from '../services/backup.ts';
 import { startSnapshotScheduler } from '../services/snapshots.ts';
 import { createTestEnv, type TestEnv } from '../test/helpers.ts';
@@ -84,7 +85,7 @@ describe('GET /api/backup/export', () => {
     const envelope = backupEnvelopeSchema.parse(await res.json());
     expect(envelope).toMatchObject({
       app: 'bookshelf',
-      schemaVersion: 1,
+      schemaVersion: loadMigrations().length,
       exportedAt: '2026-11-14T12:00:00.000Z',
     });
     expect(envelope.data.books.map((b) => b.id)).toEqual([book.id]);

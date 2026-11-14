@@ -93,7 +93,7 @@ function Shell({ children }: { children: ReactNode }) {
 }
 
 function sortForPicker(books: BookListItem[]): BookListItem[] {
-  const rank = { reading: 0, to_read: 1, finished: 2, dnf: 3 } as const;
+  const rank = { reading: 0, paused: 1, to_read: 2, finished: 3, dnf: 4 } as const;
   return [...books].sort(
     (a, b) => rank[a.status] - rank[b.status] || a.title.localeCompare(b.title, 'en-GB'),
   );
