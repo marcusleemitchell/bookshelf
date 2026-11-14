@@ -4,7 +4,9 @@ A personal, self-hosted reading tracker. Log reading sessions (time and progress
 
 It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Single user, no accounts.
 
-> Status: phase 2 — the server, API, backups, Notion mirror and the full web app (installable PWA with offline support and barcode scanning) are complete. Next: running it as an always-on service with HTTPS via Tailscale (see [Roadmap](#roadmap)).
+> Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. Imports from Bookpine and Notion are still to come (see [Roadmap](#roadmap)).
+
+In short: [set up](#setup) → [run it as a service](#running-as-a-service-start-at-login) → [publish it with Tailscale](#remote-access-with-tailscale-https-for-the-iphone) → [install it on the iPhone](#installing-on-the-iphone-home-screen) → [use it](#using-the-app).
 
 ## Prerequisites
 
@@ -92,35 +94,21 @@ The scripts use `tailscale` from your PATH, or the CLI inside `/Applications/Tai
 - The Mac must be **awake** for the iPhone to reach it (the app still opens offline and queues changes, see [Offline](#offline)). On a laptop: **System Settings → Battery → Options → Prevent automatic sleeping on power adapter when the display is off**; on a desktop Mac: **System Settings → Energy → Prevent automatic sleeping when the display is off**. The display can still turn off, and the Mac can stay locked.
 - Keep the **Mac and iPhone in the same timezone** (both set automatically is simplest). Days in the calendar, streaks and goals are counted in `BOOKSHELF_TZ` on the server — fixed to the Mac's timezone when the service was installed — while the iPhone shows times in its own zone.
 
-## Commands
+## Installing on the iPhone Home Screen
 
-| Command                     | What it does                                                                |
-| --------------------------- | --------------------------------------------------------------------------- |
-| `npm run dev`               | Server (restarts on changes) plus the Vite dev server with an `/api` proxy  |
-| `npm run dev:server`        | Server only, watching `server/` and `shared/`                               |
-| `npm run build`             | Type-check everything and build the web app into `web/dist`                 |
-| `npm start`                 | Production server on `127.0.0.1:$PORT`, serving `web/dist` when it is built |
-| `npm run lint`              | ESLint                                                                      |
-| `npm run format`            | Format with Prettier                                                        |
-| `npm run format:check`      | Check formatting                                                            |
-| `npm run typecheck`         | TypeScript checks for server, shared and web                                |
-| `npm test`                  | Run the test suite once                                                     |
-| `npm run test:coverage`     | Tests with coverage (fails below 90% lines in server, shared, scripts, web) |
-| `npm run check`             | Lint, format check, type-check and tests with coverage — the quality gate   |
-| `npm run icons`             | Regenerate the app icons in `web/public/` (commit the result)               |
-| `npm run service:install`   | Install and start the launchd agent (see above)                             |
-| `npm run service:uninstall` | Stop and remove the launchd agent                                           |
-| `npm run service:status`    | Show whether the agent is installed, running and answering                  |
-| `npm run service:logs`      | Show the server logs (`-- -f` to follow, `-- -n 200` for more lines)        |
-| `npm run tailscale:serve`   | Publish Bookshelf on your tailnet over HTTPS and print the address          |
-| `npm run tailscale:status`  | Show Tailscale's state and the Bookshelf address                            |
-| `npm run tailscale:off`     | Stop publishing Bookshelf on your tailnet                                   |
+The app is a PWA. Installing it needs HTTPS, which comes from `tailscale serve` (see [Remote access with Tailscale](#remote-access-with-tailscale-https-for-the-iphone)):
 
-During development, point the server at a throwaway data directory so you never touch your real library, for example `BOOKSHELF_DATA_DIR=/tmp/bookshelf-dev npm run dev`.
+1. On the iPhone, with Tailscale connected, open the address `npm run tailscale:serve` printed (`https://<mac-name>.<tailnet>.ts.net/`) in **Safari**.
+2. Tap **Share** → **Add to Home Screen** → **Add**.
+3. Launch **Bookshelf** from the Home Screen: it opens full screen, without Safari's toolbars.
+
+The Home Screen app talks to the same server as the Mac, so everything you log on one shows on the other.
+
+On the Mac itself, just open <http://127.0.0.1:4380> (or your `PORT`) in any browser.
 
 ## Using the app
 
-Open the server's address in a browser (the Mac: <http://127.0.0.1:4380>; the iPhone: the HTTPS Tailscale address, see below). The tab bar has five screens:
+Open Bookshelf from the Home Screen (or <http://127.0.0.1:4380> on the Mac). The tab bar has five screens:
 
 - **Today** — the reading timer (start, pause, resume, then **Stop & log** to turn it into a session), the books you're reading with progress and an estimated finish date, today's minutes against your daily goal, and your streak. The timer keeps running while the app is closed.
 - **Library** — shelves (Reading, To read, Finished, Did not finish), tag filter and search. **Add book** (also on Today) finds books by scanning the barcode, typing the ISBN, or searching by title/author, then lets you pick your formats (physical, Kindle, audiobook) and their lengths. Anything the services don't know can be entered manually.
@@ -130,17 +118,9 @@ Open the server's address in a browser (the Mac: <http://127.0.0.1:4380>; the iP
 - **Stats** — week / month / year / all time: reading time, pages and progress charts, breakdowns by format, genre, tag and author, reading speed, goals and a year in review.
 - **Settings** — goals, tags, backup export/import, Notion sync, server status and offline changes.
 
-Dates are shown as `DD/MM/YYYY` in the device's timezone; set `BOOKSHELF_TZ` to the same zone so days line up.
+A typical day: tap **Start timer** on Today when you sit down to read (or put the audiobook on), **Stop & log** when you finish and enter where you got to — the page, the percentage Kindle shows, or the audiobook position. Forgot the timer? **Log** on a book records a session after the fact. Adding a book takes a barcode scan or a search; Open Library supplies the cover, synopsis and page count, which you can correct before saving.
 
-### Installing on the iPhone Home Screen
-
-The app is a PWA. Installing it needs HTTPS, which comes from `tailscale serve` (see [Remote access with Tailscale](#remote-access-with-tailscale-https-for-the-iphone)):
-
-1. On the iPhone, with Tailscale connected, open the address `npm run tailscale:serve` printed (`https://<mac-name>.<tailnet>.ts.net/`) in **Safari**.
-2. Tap **Share** → **Add to Home Screen** → **Add**.
-3. Launch **Bookshelf** from the Home Screen: it opens full screen, without Safari's toolbars.
-
-Updates install themselves: after a new `npm run build`, the next launch (or the one after) picks up the new version.
+Dates are shown as `DD/MM/YYYY`; durations as `1h 05m`; audiobook positions as `h:mm:ss`. Days (calendar, streaks, daily goal) are counted in `BOOKSHELF_TZ` on the server, so keep the iPhone in the same timezone as the Mac.
 
 ### Offline
 
@@ -159,33 +139,16 @@ If a change keeps being rejected (for example because it conflicts with somethin
 
 When the camera can't be used the app explains why; type the ISBN instead. The barcode decoder (zxing-wasm) is served by the app itself, so scanning works offline and sends nothing to third parties (looking the ISBN up still needs the server).
 
-## Configuration
+### Updating Bookshelf
 
-Settings are environment variables, read from `.env` in the repo root if present (variables already set in the environment win). `.env` is gitignored; `.env.example` lists everything. Invalid values stop the server at startup with a clear message.
-
-| Variable                | Default                                   | Purpose                                                                                                      |
-| ----------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `PORT`                  | `4380`                                    | Server port. The server always binds to `127.0.0.1` (loopback only).                                         |
-| `BOOKSHELF_DATA_DIR`    | `~/Library/Application Support/Bookshelf` | Database, cover cache and backups. `~` is expanded.                                                          |
-| `BOOKSHELF_TZ`          | system timezone                           | IANA timezone (e.g. `Europe/London`) used to group sessions into days.                                       |
-| `LOG_LEVEL`             | `info`                                    | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stdout.                                           |
-| `GOOGLE_BOOKS_API_KEY`  | unset                                     | Optional. Google Books refuses keyless requests, so without a key lookups use Open Library only (see below). |
-| `NOTION_TOKEN`          | unset                                     | Notion internal integration secret. Set together with the next variable.                                     |
-| `NOTION_PARENT_PAGE_ID` | unset                                     | Notion page (ID or page URL) under which Bookshelf creates its databases.                                    |
-
-Secrets are never written to the logs.
-
-## Data location
-
-Everything lives in `BOOKSHELF_DATA_DIR`:
-
+```sh
+git pull
+npm install
+npm run build
+npm run service:install   # restarts the service on the new code
 ```
-Bookshelf/
-├── bookshelf.db      SQLite database (WAL mode, so also bookshelf.db-wal / -shm)
-├── covers/           cached cover images, one per book (<book id>.jpg/png/webp)
-├── backups/          automatic and pre-import JSON snapshots
-└── logs/             server logs when running as a service (bookshelf.log, bookshelf.err.log)
-```
+
+The installed app picks up the new version by itself: the next launch (or the one after) loads it. Database migrations run automatically when the server starts. For a belt-and-braces update, export a backup first (see below).
 
 ## Backups and restore
 
@@ -231,6 +194,81 @@ Bookshelf can mirror your library, sessions and notes into Notion. The mirror is
 
 The first run creates three databases under the page — _Bookshelf Books_, _Bookshelf Sessions_ and _Bookshelf Notes_ — and later runs update them, skipping unchanged rows and archiving deleted ones. Requests are rate-limited to about three per second, so a large first sync takes a little while. If a database is deleted in Notion, the next run recreates it. Without the two variables the status endpoint reports `"configured": false`.
 
+## Troubleshooting
+
+Start with the two status commands — they say what is wrong and what to do:
+
+```sh
+npm run service:status     # is the server installed, running and answering?
+npm run tailscale:status   # is Tailscale signed in, is HTTPS on, is Bookshelf published?
+```
+
+- **The service will not start or keeps restarting.** Look at `npm run service:logs` (startup errors such as an invalid `.env` value are in `bookshelf.err.log`). launchd retries at most every 30 seconds. Fix the cause, then run `npm run service:install` again.
+- **`service:status` warns that the agent's Node no longer exists** (after removing a Node version or reinstalling Node elsewhere): run `npm run service:install` again from a shell where `node --version` is 25 or later.
+- **"Port 4380 is already in use".** Stop the program named in the message — often a Bookshelf you started with `npm start` — or set another `PORT` in `.env` and run `npm run tailscale:serve` again afterwards so Tailscale forwards to the new port.
+- **The iPhone cannot reach Bookshelf.** Check that Tailscale is connected on the iPhone (VPN on) and the Mac, that the Mac is awake, and that `npm run tailscale:status` shows the address. The app still opens offline and queues your changes.
+- **`tailscale:serve` says HTTPS certificates are not enabled.** Enable them in the admin console (<https://login.tailscale.com/admin/dns> → HTTPS Certificates) and run it again. To clear every Tailscale serve setting on the Mac (not only Bookshelf's): `tailscale serve reset`.
+- **The app still shows an old version.** Close it fully (swipe it away) and reopen it; a new version is picked up on the next launch or the one after.
+- **Days look off by one** (a late-night session on the wrong day, a broken streak): the Mac's `BOOKSHELF_TZ` and the iPhone's timezone differ. Set `BOOKSHELF_TZ` in `.env` and run `npm run service:install`.
+- **Looked-up books have no synopsis.** Open Library has no description for that edition; type one in, or set `GOOGLE_BOOKS_API_KEY` so Google Books can fill it (keyless Google Books requests are refused).
+- **The camera does not start.** Use the HTTPS address (not plain `http://` to the Mac's name) and allow camera access for Safari (**Settings → Apps → Safari → Camera**).
+- **A change is marked as failed** in the offline banner: **Settings → Offline changes** shows why, with Retry and Discard.
+- **The log files are getting large.** They are plain append-only files; empty them at any time with `: > "<data dir>/logs/bookshelf.log"` (the path is shown by `service:status`).
+
+## Configuration
+
+Settings are environment variables, read from `.env` in the repo root if present (variables already set in the environment win). `.env` is gitignored; `.env.example` lists everything. Invalid values stop the server at startup with a clear message.
+
+| Variable                | Default                                   | Purpose                                                                                                      |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `PORT`                  | `4380`                                    | Server port. The server always binds to `127.0.0.1` (loopback only).                                         |
+| `BOOKSHELF_DATA_DIR`    | `~/Library/Application Support/Bookshelf` | Database, cover cache and backups. `~` is expanded.                                                          |
+| `BOOKSHELF_TZ`          | system timezone                           | IANA timezone (e.g. `Europe/London`) used to group sessions into days.                                       |
+| `LOG_LEVEL`             | `info`                                    | `debug`, `info`, `warn` or `error`. Logs are JSON lines on stdout.                                           |
+| `GOOGLE_BOOKS_API_KEY`  | unset                                     | Optional. Google Books refuses keyless requests, so without a key lookups use Open Library only (see below). |
+| `NOTION_TOKEN`          | unset                                     | Notion internal integration secret. Set together with the next variable.                                     |
+| `NOTION_PARENT_PAGE_ID` | unset                                     | Notion page (ID or page URL) under which Bookshelf creates its databases.                                    |
+
+Secrets are never written to the logs.
+
+## Data location
+
+Everything lives in `BOOKSHELF_DATA_DIR`:
+
+```
+Bookshelf/
+├── bookshelf.db      SQLite database (WAL mode, so also bookshelf.db-wal / -shm)
+├── covers/           cached cover images, one per book (<book id>.jpg/png/webp)
+├── backups/          automatic and pre-import JSON snapshots
+└── logs/             server logs when running as a service (bookshelf.log, bookshelf.err.log)
+```
+
+## Commands
+
+| Command                     | What it does                                                                |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `npm run dev`               | Server (restarts on changes) plus the Vite dev server with an `/api` proxy  |
+| `npm run dev:server`        | Server only, watching `server/` and `shared/`                               |
+| `npm run build`             | Type-check everything and build the web app into `web/dist`                 |
+| `npm start`                 | Production server on `127.0.0.1:$PORT`, serving `web/dist` when it is built |
+| `npm run lint`              | ESLint                                                                      |
+| `npm run format`            | Format with Prettier                                                        |
+| `npm run format:check`      | Check formatting                                                            |
+| `npm run typecheck`         | TypeScript checks for server, shared and web                                |
+| `npm test`                  | Run the test suite once                                                     |
+| `npm run test:coverage`     | Tests with coverage (fails below 90% lines in server, shared, scripts, web) |
+| `npm run check`             | Lint, format check, type-check and tests with coverage — the quality gate   |
+| `npm run icons`             | Regenerate the app icons in `web/public/` (commit the result)               |
+| `npm run service:install`   | Install and start the launchd agent (see above)                             |
+| `npm run service:uninstall` | Stop and remove the launchd agent                                           |
+| `npm run service:status`    | Show whether the agent is installed, running and answering                  |
+| `npm run service:logs`      | Show the server logs (`-- -f` to follow, `-- -n 200` for more lines)        |
+| `npm run tailscale:serve`   | Publish Bookshelf on your tailnet over HTTPS and print the address          |
+| `npm run tailscale:status`  | Show Tailscale's state and the Bookshelf address                            |
+| `npm run tailscale:off`     | Stop publishing Bookshelf on your tailnet                                   |
+
+During development, point the server at a throwaway data directory so you never touch your real library, for example `BOOKSHELF_DATA_DIR=/tmp/bookshelf-dev npm run dev`.
+
 ## Architecture
 
 ```
@@ -245,7 +283,7 @@ iPhone / Mac browser ──HTTPS──> tailscale serve ──HTTP──> 127.0.
 - `server/` — Hono app (`app.ts`), entry point (`index.ts`), configuration, logging, SQLite access and migrations (`db/`, `migrations/`), repositories, services (library, sessions, timer, lookup, stats, sync, backup, snapshots, Notion) and routes.
 - `shared/` — the API contract (Zod schemas and types for every entity, request and response) and pure helpers: ISBN normalisation, timezone day bucketing, percent/progress/speed/estimated-finish/streak derivations, and `DD/MM/YYYY`/duration formatting.
 - `web/` — Vite + React PWA: a typed API client (every response parsed with the shared schemas), a hand-written hash router, the SPEC §6 screens, Recharts charts, the zxing-wasm barcode scanner, and the offline layer (Dexie outbox plus a cached read model). One plain stylesheet (`web/src/styles.css`) with light and dark palettes.
-- `scripts/` — the dependency-free icon generator (`npm run icons`).
+- `scripts/` and `ops/` — tooling run directly by Node with no extra packages: the icon generator (`npm run icons`), the launchd service (`scripts/service.ts`, template `ops/com.bookshelf.server.plist`) and Tailscale serve (`scripts/tailscale.ts`), sharing `scripts/runtime.ts`.
 
 The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 
@@ -260,5 +298,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 
 ## Roadmap
 
-- **Always-on service and remote access (phase 3)**: a launchd agent to start the server at login, and `tailscale serve` set-up for HTTPS access from the iPhone.
-- **Imports**: Bookpine export and Notion database import, awaiting sample files (`~/Development/bookshelf-samples/`) so the formats can be mapped.
+- **Imports**: Bookpine export and Notion database import, awaiting sample files (`~/Development/bookshelf-samples/`) so the formats can be mapped (SPEC §8).
+- **Development-only `npm audit` advisories** (tracked): 12 advisories (2 low, 10 moderate), all in development tooling, none in the production dependency tree (`npm audit --omit=dev` reports 0). They come from three upstream issues — `minimatch` ReDoS ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) via `typescript-eslint`, `glob` ([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)) and `deepmerge` ([GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4)) via `vite-plugin-pwa`'s `workbox-build`. The suggested `npm audit fix --force` would downgrade those packages (breaking changes), so the fix is to upgrade them when patched releases are out; re-check with `npm audit` when upgrading dependencies.
+- **Log rotation** for the service logs (currently cleared by hand, see Troubleshooting).
+- **Search language**: title search prefers English editions (ADR 0008); make it configurable if needed.
