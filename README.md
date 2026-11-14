@@ -4,7 +4,7 @@ A personal, self-hosted reading tracker. Log reading sessions (time and progress
 
 It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Single user, no accounts.
 
-> Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. Imports from Bookpine and Notion are still to come (see [Roadmap](#roadmap)).
+> Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. The Bookpine import is still to come (see [Roadmap](#roadmap)).
 
 In short: [set up](#setup) → [run it as a service](#running-as-a-service-start-at-login) → [publish it with Tailscale](#remote-access-with-tailscale-https-for-the-iphone) → [install it on the iPhone](#installing-on-the-iphone-home-screen) → [use it](#using-the-app).
 
@@ -298,7 +298,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 
 ## Roadmap
 
-- **Imports**: Bookpine export and Notion database import, awaiting sample files (`~/Development/bookshelf-samples/`) so the formats can be mapped (SPEC §8).
+- **Bookpine import**: import the Bookpine CSV export (SPEC §8). Importing from Notion is not planned: it would hold the same data, and Notion stays a one-way mirror.
 - **Development-only `npm audit` advisories** (tracked): 12 advisories (2 low, 10 moderate), all in development tooling, none in the production dependency tree (`npm audit --omit=dev` reports 0). They come from three upstream issues — `minimatch` ReDoS ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) via `typescript-eslint`, `glob` ([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)) and `deepmerge` ([GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4)) via `vite-plugin-pwa`'s `workbox-build`. The suggested `npm audit fix --force` would downgrade those packages (breaking changes), so the fix is to upgrade them when patched releases are out; re-check with `npm audit` when upgrading dependencies.
 - **Log rotation** for the service logs (currently cleared by hand, see Troubleshooting).
 - **Search language**: title search prefers English editions (ADR 0008); make it configurable if needed.

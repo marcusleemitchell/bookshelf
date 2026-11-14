@@ -159,7 +159,8 @@ Behaviour decided in phase 2:
 
 ## 8. Imports
 
-Bookpine export and Notion database import are **pending sample files** from the user (`~/Development/bookshelf-samples/`). Not implemented until formats are known; tracked in README "Roadmap".
+- **Bookpine CSV export**: the format is known from the user's sample export; the importer is being built (tracked in README "Roadmap").
+- **Notion database import is out of scope**: the user confirmed it would hold the same data as the Bookpine export. Notion remains a one-way backup mirror (§7, ADR 0006); nothing is ever read back from it.
 
 ## 9. Operations
 
