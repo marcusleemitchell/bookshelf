@@ -178,21 +178,23 @@ function needsEnrichment(db: Db, target: Target): boolean {
   );
 }
 
-function isNotFound(error: unknown): boolean {
-  return error instanceof AppError && error.status === 404;
-}
-
-/** Looks a book up by ISBN-13, then ISBN-10, then title and author. Never throws for lookups. */
+/**
+ * Looks a book up by ISBN-13, then ISBN-10, then title and author. An ISBN
+ * lookup that fails (e.g. Google Books refusing keyless requests after Open
+ * Library found nothing, which the lookup service reports as a 502) moves on
+ * like a 404; the result is `failed` only when the final search could not
+ * run. Never throws for lookup errors.
+ */
 async function enrich(ctx: AppContext, planned: PlannedBook): Promise<Enrichment> {
-  try {
-    for (const isbn of [planned.isbn13, planned.isbn10]) {
-      if (!isbn) continue;
-      try {
-        return { status: 'found', candidate: await lookupIsbn(ctx, isbn) };
-      } catch (error) {
-        if (!isNotFound(error)) throw error;
-      }
+  for (const isbn of [planned.isbn13, planned.isbn10]) {
+    if (!isbn) continue;
+    try {
+      return { status: 'found', candidate: await lookupIsbn(ctx, isbn) };
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
     }
+  }
+  try {
     const query = [planned.title, planned.authors[0]].filter(Boolean).join(' ');
     const results = await searchBooks(ctx, query.slice(0, 200), 1);
     const want = titleKeys(planned.title).main;

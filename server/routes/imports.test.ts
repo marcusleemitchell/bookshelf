@@ -520,8 +520,19 @@ describe('POST /api/import/bookpine', () => {
     expect(report.warnings).toContainEqual({
       slug: 'the-lantern-keeper-1001',
       message:
-        'Lookup failed (Book lookup services are unavailable; try again later); imported without a cover or synopsis',
+        'Lookup failed (Book search services are unavailable; try again later); imported without a cover or synopsis',
     });
+  });
+
+  it('falls back to search when Google Books refuses keyless ISBN lookups', async () => {
+    fakeLookups();
+    env.fetchMock.on(GOOGLE, () => new Response('quota', { status: 429 }));
+    const report = await runImport();
+    // Unknown ISBNs now give 502 (a source failed), which still moves on to the search.
+    expect(report.enrichment).toEqual({ pending: 0, found: 4, notFound: 12, failed: 0 });
+    expect(
+      env.fetchMock.calls.filter((call) => call.url.startsWith(OL_SEARCH)).length,
+    ).toBeGreaterThanOrEqual(12);
   });
 
   it('counts covers that could not be downloaded', async () => {
