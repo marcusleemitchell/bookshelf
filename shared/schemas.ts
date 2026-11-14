@@ -14,8 +14,11 @@ import { isValidIsbn10, isValidIsbn13 } from './isbn.ts';
 // ---------------------------------------------------------------------------
 
 export const idSchema = z.uuid();
-/** ISO 8601 UTC instant, e.g. `2026-11-14T09:30:00.000Z`. */
-export const instantSchema = z.iso.datetime();
+/**
+ * ISO 8601 UTC instant, e.g. `2026-11-14T09:30:00.000Z`. Normalised to
+ * millisecond precision so stored instants compare correctly as strings.
+ */
+export const instantSchema = z.iso.datetime().transform((value) => new Date(value).toISOString());
 /** Local calendar date `YYYY-MM-DD`. */
 export const dateKeySchema = z
   .string()
