@@ -146,6 +146,22 @@ describe('POST /api/sync', () => {
     expect(book.currentRead).toMatchObject({ id: READ_ID, outcome: 'in_progress' });
   });
 
+  it('keeps a session’s source when a client omits it, and accepts an unknown duration', async () => {
+    await seed();
+    const [imported] = await sync(
+      op(
+        'session',
+        sessionPayload({ durationSeconds: null, source: 'bookpine' }),
+        '2026-11-14T11:00:00.000Z',
+      ),
+    );
+    expect(imported?.status).toBe('applied');
+    // An older client re-sends the record without `source` after adding a duration.
+    await sync(op('session', sessionPayload({ durationSeconds: 900 }), '2026-11-14T12:00:00.000Z'));
+    const sessions = (await env.request<Session[]>('GET', '/api/sessions')).body;
+    expect(sessions[0]).toMatchObject({ durationSeconds: 900, source: 'bookpine' });
+  });
+
   it('is idempotent by opId', async () => {
     const first = op('book', bookPayload());
     expect(await sync(first)).toEqual([{ opId: first.opId, status: 'applied', duplicate: false }]);

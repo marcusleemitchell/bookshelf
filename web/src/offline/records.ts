@@ -293,11 +293,13 @@ export function planSession(
     startValue: input.startValue,
     endValue: input.endValue,
     note: input.note,
+    source: 'app',
   };
   ops.push({ entity: 'session', action: 'upsert', payload, label: `Session: ${detail.title}` });
 
   const session: Session = {
     ...payload,
+    source: 'app',
     startPercent: computePercent(input.progressUnit, input.startValue, format),
     endPercent: computePercent(input.progressUnit, input.endValue, format),
     createdAt: at,

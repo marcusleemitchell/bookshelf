@@ -89,7 +89,7 @@ describe('GET /api/stats/summary', () => {
     expect(statsSummarySchema.parse(res.body)).toEqual({
       from: null,
       to: null,
-      totals: { seconds: 10_200, sessions: 5, pages: 110, booksFinished: 1 },
+      totals: { seconds: 10_200, sessions: 5, pages: 110, booksFinished: 1, untimedSessions: 0 },
       byFormat: [
         { format: 'physical', seconds: 7500, sessions: 4, pages: 110 },
         { format: 'audiobook', seconds: 2700, sessions: 1, pages: 0 },
@@ -131,7 +131,13 @@ describe('GET /api/stats/summary', () => {
       'GET',
       '/api/stats/summary?from=2026-11-13&to=2026-11-13',
     );
-    expect(res.body.totals).toEqual({ seconds: 1800, sessions: 1, pages: 40, booksFinished: 0 });
+    expect(res.body.totals).toEqual({
+      seconds: 1800,
+      sessions: 1,
+      pages: 40,
+      booksFinished: 0,
+      untimedSessions: 0,
+    });
     // Speed uses the 30 days ending at `to`.
     expect(res.body.readingSpeed.map((s) => [s.format, s.sessions])).toEqual([['physical', 2]]);
     const finished = await env.request<StatsSummary>('GET', '/api/stats/summary?from=2026-11-14');
@@ -158,9 +164,33 @@ describe('GET /api/stats/daily', () => {
       from: '2026-11-12',
       to: '2026-11-14',
       days: [
-        { date: '2026-11-12', seconds: 3600, minutes: 60, pages: 40, percent: 10, sessions: 1 },
-        { date: '2026-11-13', seconds: 1800, minutes: 30, pages: 40, percent: 10, sessions: 1 },
-        { date: '2026-11-14', seconds: 3600, minutes: 60, pages: 10, percent: 12.5, sessions: 2 },
+        {
+          date: '2026-11-12',
+          seconds: 3600,
+          minutes: 60,
+          pages: 40,
+          percent: 10,
+          sessions: 1,
+          untimedSessions: 0,
+        },
+        {
+          date: '2026-11-13',
+          seconds: 1800,
+          minutes: 30,
+          pages: 40,
+          percent: 10,
+          sessions: 1,
+          untimedSessions: 0,
+        },
+        {
+          date: '2026-11-14',
+          seconds: 3600,
+          minutes: 60,
+          pages: 10,
+          percent: 12.5,
+          sessions: 2,
+          untimedSessions: 0,
+        },
       ],
     });
   });
@@ -287,17 +317,39 @@ describe('GET /api/calendar', () => {
       days: [
         {
           date: '2026-11-12',
-          entries: [{ bookId: a.id, title: 'The Dispossessed', coverUrl: null, minutes: 60 }],
+          entries: [
+            {
+              bookId: a.id,
+              title: 'The Dispossessed',
+              coverUrl: null,
+              minutes: 60,
+              untimedSessions: 0,
+            },
+          ],
         },
         {
           date: '2026-11-13',
-          entries: [{ bookId: a.id, title: 'The Dispossessed', coverUrl: null, minutes: 30 }],
+          entries: [
+            {
+              bookId: a.id,
+              title: 'The Dispossessed',
+              coverUrl: null,
+              minutes: 30,
+              untimedSessions: 0,
+            },
+          ],
         },
         {
           date: '2026-11-14',
           entries: [
-            { bookId: b.id, title: 'SPQR', coverUrl: null, minutes: 45 },
-            { bookId: a.id, title: 'The Dispossessed', coverUrl: null, minutes: 15 },
+            { bookId: b.id, title: 'SPQR', coverUrl: null, minutes: 45, untimedSessions: 0 },
+            {
+              bookId: a.id,
+              title: 'The Dispossessed',
+              coverUrl: null,
+              minutes: 15,
+              untimedSessions: 0,
+            },
           ],
         },
       ],
@@ -314,5 +366,135 @@ describe('GET /api/calendar', () => {
       month: '2026-02',
       days: [],
     });
+  });
+});
+
+describe('sessions with an unknown duration', () => {
+  it('count for the calendar and streaks but not for time, speed, goals or finish estimates', async () => {
+    env = createTestEnv();
+    const book = (
+      await env.request<BookDetail>('POST', '/api/books', {
+        title: 'Hild',
+        authors: ['Nicola Griffith'],
+        status: 'reading',
+        formats: [{ format: 'physical', pageCount: 500 }],
+      })
+    ).body;
+    const formatId = book.formats[0]?.id as string;
+    const untimed = async (day: string, start: number, end: number) => {
+      const res = await env.request<{ id: string; durationSeconds: number | null }>(
+        'POST',
+        '/api/sessions',
+        {
+          bookId: book.id,
+          formatId,
+          startedAt: `${day}T12:00:00.000Z`,
+          endedAt: `${day}T12:00:00.000Z`,
+          durationSeconds: null,
+          progressUnit: 'pages',
+          startValue: start,
+          endValue: end,
+        },
+      );
+      expect(res.status).toBe(201);
+      expect(res.body.durationSeconds).toBeNull();
+      return res.body.id;
+    };
+    await untimed('2026-11-12', 0, 50);
+    await untimed('2026-11-13', 50, 100);
+    const timed = await env.request('POST', '/api/sessions', {
+      bookId: book.id,
+      formatId,
+      startedAt: '2026-11-14T09:00:00.000Z',
+      endedAt: '2026-11-14T09:30:00.000Z',
+      progressUnit: 'pages',
+      startValue: 100,
+      endValue: 120,
+    });
+    expect(timed.status).toBe(201);
+    await env.request('PUT', '/api/goals/66666666-6666-4666-8666-666666666666', {
+      kind: 'minutes_per_day',
+      target: 30,
+    });
+
+    const summary = (await env.request<StatsSummary>('GET', '/api/stats/summary')).body;
+    expect(summary.totals).toEqual({
+      seconds: 1800,
+      sessions: 3,
+      pages: 120,
+      booksFinished: 0,
+      untimedSessions: 2,
+    });
+    expect(summary.readingSpeed).toEqual([
+      {
+        format: 'physical',
+        sessions: 1,
+        seconds: 1800,
+        pagesPerHour: 40,
+        percentPerHour: 8,
+        listeningRatio: null,
+      },
+    ]);
+
+    const daily = (
+      await env.request<StatsDaily>('GET', '/api/stats/daily?from=2026-11-12&to=2026-11-14')
+    ).body;
+    expect(daily.days.map((d) => [d.date, d.minutes, d.sessions, d.untimedSessions])).toEqual([
+      ['2026-11-12', 0, 1, 1],
+      ['2026-11-13', 0, 1, 1],
+      ['2026-11-14', 30, 1, 0],
+    ]);
+
+    const streak = (await env.request<StreaksResponse>('GET', '/api/stats/streaks')).body;
+    expect(streak).toMatchObject({ current: 3, longest: 3 });
+
+    const calendar = (await env.request<CalendarResponse>('GET', '/api/calendar?month=2026-11'))
+      .body;
+    expect(
+      calendar.days.map((d) => [d.date, d.entries[0]?.minutes, d.entries[0]?.untimedSessions]),
+    ).toEqual([
+      ['2026-11-12', 0, 1],
+      ['2026-11-13', 0, 1],
+      ['2026-11-14', 30, 0],
+    ]);
+
+    const review = (await env.request<YearInReview>('GET', '/api/stats/year/2026')).body;
+    expect(review.totals).toMatchObject({ seconds: 1800, sessions: 3, daysRead: 3 });
+    expect(review.longestSession?.seconds).toBe(1800);
+
+    const goals = (await env.request<{ kind: string; current: number }[]>('GET', '/api/goals'))
+      .body;
+    expect(goals.find((g) => g.kind === 'minutes_per_day')?.current).toBe(30);
+
+    // Only the timed session's 4% counts towards the finish estimate (4% / 14 days).
+    const detail = (
+      await env.request<{ estimatedFinish: { percentPerDay: number } | null }>(
+        'GET',
+        `/api/books/${book.id}`,
+      )
+    ).body;
+    expect(detail.estimatedFinish?.percentPerDay).toBe(0.29);
+  });
+
+  it('leaves the longest session empty when no session has a known time', async () => {
+    env = createTestEnv();
+    const book = (
+      await env.request<BookDetail>('POST', '/api/books', {
+        title: 'Hild',
+        formats: [{ format: 'kindle' }],
+      })
+    ).body;
+    await env.request('POST', '/api/sessions', {
+      bookId: book.id,
+      formatId: book.formats[0]?.id,
+      startedAt: '2026-11-12T12:00:00.000Z',
+      endedAt: '2026-11-12T12:00:00.000Z',
+      durationSeconds: null,
+      progressUnit: 'percent',
+      endValue: 10,
+    });
+    const review = (await env.request<YearInReview>('GET', '/api/stats/year/2026')).body;
+    expect(review.longestSession).toBeNull();
+    expect(review.totals.daysRead).toBe(1);
   });
 });

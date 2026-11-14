@@ -199,24 +199,32 @@ export function Stats() {
 function Totals({ summary }: { summary: StatsSummary }) {
   const { totals } = summary;
   return (
-    <section aria-label="Totals" className="stat-grid">
-      <div className="stat">
-        <div className="label">Reading time</div>
-        <div className="value">{formatDuration(totals.seconds)}</div>
-      </div>
-      <div className="stat">
-        <div className="label">Sessions</div>
-        <div className="value">{totals.sessions}</div>
-      </div>
-      <div className="stat">
-        <div className="label">Pages</div>
-        <div className="value">{totals.pages}</div>
-      </div>
-      <div className="stat">
-        <div className="label">Books finished</div>
-        <div className="value">{totals.booksFinished}</div>
-      </div>
-    </section>
+    <>
+      <section aria-label="Totals" className="stat-grid">
+        <div className="stat">
+          <div className="label">Reading time</div>
+          <div className="value">{formatDuration(totals.seconds)}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Sessions</div>
+          <div className="value">{totals.sessions}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Pages</div>
+          <div className="value">{totals.pages}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Books finished</div>
+          <div className="value">{totals.booksFinished}</div>
+        </div>
+      </section>
+      {totals.untimedSessions > 0 && (
+        <p className="small muted">
+          {plural(totals.untimedSessions, 'session')} with unknown time (imported) count as sessions
+          but not towards reading time, minutes or speed.
+        </p>
+      )}
+    </>
   );
 }
 

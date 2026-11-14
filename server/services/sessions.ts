@@ -128,12 +128,16 @@ export function createSession(ctx: AppContext, input: SessionCreateInput): Sessi
       formatId: format.id,
       startedAt: input.startedAt,
       endedAt: input.endedAt,
-      durationSeconds: input.durationSeconds ?? defaultDuration(input.startedAt, input.endedAt),
+      durationSeconds:
+        input.durationSeconds !== undefined
+          ? input.durationSeconds
+          : defaultDuration(input.startedAt, input.endedAt),
       progressUnit: input.progressUnit,
       startValue,
       endValue: input.endValue,
       ...derivePercents(format, input.progressUnit, startValue, input.endValue),
       note: input.note,
+      source: 'app',
       createdAt: at,
       updatedAt: at,
       deletedAt: null,

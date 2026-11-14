@@ -25,6 +25,9 @@ import {
   progressInputValue,
   ratingLabel,
   ratingStars,
+  dayTimeLabel,
+  sessionDurationLabel,
+  unknownTimeLabel,
 } from './labels.ts';
 
 const TZ = 'Europe/London';
@@ -60,6 +63,19 @@ describe('dates', () => {
 });
 
 describe('labels', () => {
+  it('labels unknown session times and day totals', () => {
+    expect(unknownTimeLabel({ source: 'bookpine' })).toBe('Time unknown · imported');
+    expect(unknownTimeLabel({ source: 'app' })).toBe('Time unknown');
+    expect(sessionDurationLabel({ durationSeconds: 2700, source: 'bookpine' })).toBe('45m');
+    expect(sessionDurationLabel({ durationSeconds: null, source: 'bookpine' })).toBe(
+      'Time unknown · imported',
+    );
+    expect(dayTimeLabel(65, 0)).toBe('1h 05m');
+    expect(dayTimeLabel(0, 0)).toBe('0m');
+    expect(dayTimeLabel(0, 2)).toBe('time unknown');
+    expect(dayTimeLabel(25, 1)).toBe('25m + time unknown');
+  });
+
   it('formats progress values per unit', () => {
     expect(formatProgressValue('pages', 42)).toBe('p. 42');
     expect(formatProgressValue('percent', 33.46)).toBe('33.5%');

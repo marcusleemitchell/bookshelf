@@ -217,6 +217,71 @@ describe('Book detail', () => {
     });
   });
 
+  it('labels imported sessions “Time unknown · imported” and adds a duration later', async () => {
+    const imported = makeSession({
+      id: IDS.session2,
+      startedAt: '2026-11-07T12:00:00.000Z',
+      endedAt: '2026-11-07T12:00:00.000Z',
+      durationSeconds: null,
+      source: 'bookpine',
+      startValue: null,
+      endValue: null,
+      startPercent: null,
+      endPercent: null,
+      note: null,
+    });
+    const server = createMockServer({
+      ...defaultRoutes(),
+      ...bookRoutes({
+        'GET /api/sessions': ok([imported]),
+        'PATCH /api/sessions/:id': (req) => ({
+          body: { ...imported, ...(req.body as object) },
+        }),
+      }),
+    });
+    const { user } = renderApp({ hash, server });
+    const sessions = (await screen.findByRole('heading', { name: 'Sessions' })).parentElement;
+    if (!sessions) throw new Error('no sessions section');
+    expect(await within(sessions).findByText(/Time unknown · imported/)).toBeInTheDocument();
+    expect(within(sessions).queryByText(/12:00/)).not.toBeInTheDocument();
+
+    await user.click(
+      within(sessions).getByRole('button', { name: 'Add reading time for 07/11/2026' }),
+    );
+    const minutes = within(sessions).getByLabelText('Minutes read on 07/11/2026');
+    await user.type(minutes, '0');
+    await user.click(within(sessions).getByRole('button', { name: 'Save' }));
+    expect(within(sessions).getByRole('alert')).toHaveTextContent(
+      'Enter whole minutes from 1 to 10080',
+    );
+    await user.clear(minutes);
+    await user.type(minutes, '35');
+    await user.click(within(sessions).getByRole('button', { name: 'Save' }));
+    await waitFor(() => {
+      expect(server.callsTo('PATCH', `/api/sessions/${IDS.session2}`)[0]?.body).toEqual({
+        durationSeconds: 2100,
+      });
+    });
+    await waitFor(() => {
+      expect(within(sessions).queryByLabelText(/Minutes read on/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('lets the add-time form be cancelled', async () => {
+    const untimed = makeSession({ durationSeconds: null });
+    const { user } = renderApp({
+      hash,
+      routes: bookRoutes({ 'GET /api/sessions': ok([untimed]) }),
+    });
+    const sessions = (await screen.findByRole('heading', { name: 'Sessions' })).parentElement;
+    if (!sessions) throw new Error('no sessions section');
+    // A session logged in the app without a time keeps its clock time.
+    expect(await within(sessions).findByText(/20:00 · Time unknown/)).toBeInTheDocument();
+    await user.click(within(sessions).getByRole('button', { name: /Add reading time/ }));
+    await user.click(within(sessions).getByRole('button', { name: 'Cancel' }));
+    expect(within(sessions).getByRole('button', { name: /Add reading time/ })).toBeInTheDocument();
+  });
+
   it('starts a reread of a finished book', async () => {
     const { user, server } = renderApp({
       hash: `#/books/${IDS.hailMary}`,

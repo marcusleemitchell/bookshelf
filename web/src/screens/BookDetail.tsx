@@ -11,7 +11,6 @@ import {
   bookStatusSchema,
   formatAudioPosition,
   formatDate,
-  formatDuration,
   formatPublishedDate,
   formatTypeSchema,
   languageName,
@@ -51,6 +50,8 @@ import {
   plural,
   ratingLabel,
   ratingStars,
+  sessionDurationLabel,
+  unknownTimeLabel,
 } from '../lib/labels.ts';
 import { cacheKeys } from '../offline/cache.ts';
 import { href, navigate, paths } from '../router.ts';
@@ -298,8 +299,9 @@ function SessionsList({ book, sessions }: { book: BookDetail; sessions: Session[
                   <p>
                     <strong>{formatDate(session.startedAt, services.timeZone)}</strong>{' '}
                     <span className="muted small">
-                      {formatTime(session.startedAt, services.timeZone)} ·{' '}
-                      {formatDuration(session.durationSeconds)}
+                      {session.source === 'bookpine'
+                        ? unknownTimeLabel(session)
+                        : `${formatTime(session.startedAt, services.timeZone)} · ${sessionDurationLabel(session)}`}
                       {format && ` · ${FORMAT_LABELS[format.format]}`}
                     </span>
                   </p>
@@ -309,6 +311,9 @@ function SessionsList({ book, sessions }: { book: BookDetail; sessions: Session[
                     {session.endPercent !== null && ` (${formatPercent(session.endPercent)})`}
                   </p>
                   {session.note && <p className="small muted">{session.note}</p>}
+                  {session.durationSeconds === null && (
+                    <AddSessionTime session={session} timeZone={services.timeZone} />
+                  )}
                 </div>
                 <button
                   type="button"
@@ -334,6 +339,88 @@ function SessionsList({ book, sessions }: { book: BookDetail; sessions: Session[
     </section>
   );
 }
+
+/**
+ * Lets the user record how long an untimed (e.g. imported) session took, so
+ * it starts counting towards time totals, speed and goals (SPEC §4). Needs
+ * the server, like other session edits.
+ */
+function AddSessionTime({ session, timeZone }: { session: Session; timeZone: string }) {
+  const services = useServices();
+  const { busy, error, run } = useAction();
+  const [open, setOpen] = useState(false);
+  const [minutes, setMinutes] = useState('');
+  const [invalid, setInvalid] = useState<string | null>(null);
+  const day = formatDate(session.startedAt, timeZone);
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="btn btn-ghost btn-small"
+        aria-label={`Add reading time for ${day}`}
+        onClick={() => {
+          setOpen(true);
+        }}
+      >
+        Add time
+      </button>
+    );
+  }
+  const inputId = `session-minutes-${session.id}`;
+  return (
+    <form
+      className="row"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const value = Number(minutes);
+        if (!Number.isInteger(value) || value < 1 || value > MAX_SESSION_MINUTES) {
+          setInvalid(`Enter whole minutes from 1 to ${MAX_SESSION_MINUTES}`);
+          return;
+        }
+        setInvalid(null);
+        run(async () => {
+          await services.api.updateSession(session.id, { durationSeconds: value * 60 });
+          setOpen(false);
+          invalidate(services);
+        });
+      }}
+    >
+      <div className="field grow">
+        <label htmlFor={inputId}>Minutes read on {day}</label>
+        <input
+          id={inputId}
+          type="number"
+          inputMode="numeric"
+          value={minutes}
+          onChange={(event) => {
+            setMinutes(event.target.value);
+          }}
+        />
+        {invalid && (
+          <span className="error-text" role="alert">
+            {invalid}
+          </span>
+        )}
+      </div>
+      <button type="submit" className="btn btn-small" disabled={busy}>
+        {busy ? 'Saving…' : 'Save'}
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost btn-small"
+        onClick={() => {
+          setOpen(false);
+        }}
+      >
+        Cancel
+      </button>
+      <ActionError error={error} />
+    </form>
+  );
+}
+
+/** The longest duration a session may record (SPEC §5: 7 days), in minutes. */
+const MAX_SESSION_MINUTES = 7 * 24 * 60;
 
 function NotesSection({ book }: { book: BookDetail }) {
   const notes = useResource(cacheKeys.notes(book.id), noteListSchema, (api) =>

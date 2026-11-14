@@ -3,6 +3,7 @@
  * pages, percent and audio positions as `h:mm:ss`).
  */
 import {
+  formatDuration,
   formatAudioPosition,
   parseAudioPosition,
   type BookFormat,
@@ -11,6 +12,7 @@ import {
   type GoalKind,
   type ProgressUnit,
   type ReadOutcome,
+  type Session,
 } from '../../../shared/index.ts';
 
 export const STATUS_LABELS: Record<BookStatus, string> = {
@@ -67,6 +69,28 @@ export function formatSummary(format: BookFormat): string {
       : `${label} · length unknown`;
   }
   return format.pageCount ? `${label} · ${format.pageCount} pages` : `${label} · length unknown`;
+}
+
+/** Label for a session whose reading time is unknown (SPEC §4). */
+export function unknownTimeLabel(session: Pick<Session, 'source'>): string {
+  return session.source === 'bookpine' ? 'Time unknown · imported' : 'Time unknown';
+}
+
+/** A session's duration ("45m"), or the unknown-time label. */
+export function sessionDurationLabel(session: Pick<Session, 'durationSeconds' | 'source'>): string {
+  return session.durationSeconds === null
+    ? unknownTimeLabel(session)
+    : formatDuration(session.durationSeconds);
+}
+
+/**
+ * A calendar day's (or book's) time: "1h 05m", "time unknown" when only
+ * sessions without a duration were logged, or "1h 05m + time unknown".
+ */
+export function dayTimeLabel(minutes: number, untimedSessions: number): string {
+  if (untimedSessions === 0) return formatDuration(minutes * 60);
+  if (minutes === 0) return 'time unknown';
+  return `${formatDuration(minutes * 60)} + time unknown`;
 }
 
 /** Shows a progress value in its unit: "p. 42", "34%", "1:02:10". */

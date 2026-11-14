@@ -165,6 +165,7 @@ const upserts: Record<SyncEntity, (op: OpContext, payload: unknown) => Status> =
     if (isStale(existing, op.at)) return 'stale';
     upsertRow(op.ctx.db, sessionsTable, {
       ...p,
+      source: p.source ?? existing?.source ?? 'app',
       ...derivePercents(format, p.progressUnit, p.startValue, p.endValue),
       ...syncTimestamps(existing, op.at),
     });

@@ -298,6 +298,8 @@ describe('readingSpeeds', () => {
           format: kindle,
         },
         { session: session({ startedAt: '2026-11-01T09:00:00.000Z' }), format: paperback },
+        // Unknown durations (imported days) never count towards speed.
+        { session: session({ durationSeconds: null }), format: paperback },
       ],
       now,
       7,
@@ -329,6 +331,13 @@ describe('estimateFinish', () => {
         session({ startedAt: '2026-10-31T09:00:00.000Z', startPercent: 0, endPercent: 50 }),
         // Unknown percents contribute nothing.
         session({ startedAt: '2026-11-12T09:00:00.000Z', startPercent: null, endPercent: null }),
+        // Sessions with an unknown duration are left out of the rate.
+        session({
+          startedAt: '2026-11-11T09:00:00.000Z',
+          durationSeconds: null,
+          startPercent: 0,
+          endPercent: 60,
+        }),
       ],
       now,
       timeZone: tz,

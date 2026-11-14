@@ -173,6 +173,15 @@ describe('Notion mirror', () => {
     expect(bookPage?.properties['Status']).toEqual({ select: { name: 'Paused' } });
   });
 
+  it('mirrors an unknown session duration as empty minutes', async () => {
+    setup();
+    const { session } = await seed();
+    await env.request('PATCH', `/api/sessions/${session.id}`, { durationSeconds: null });
+    await run();
+    const [sessionPage] = fake.pagesIn('Bookshelf Sessions');
+    expect(sessionPage?.properties['Minutes']).toEqual({ number: null });
+  });
+
   it('skips unchanged rows, updates changed ones and archives deleted ones', async () => {
     setup();
     const { book, session } = await seed();

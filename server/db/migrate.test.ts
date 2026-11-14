@@ -71,7 +71,10 @@ function tables(): string[] {
 describe('migrate', () => {
   it('applies the shipped migrations to a fresh database', () => {
     const result = migrate(db, MIGRATIONS_DIR, () => new Date('2026-11-14T12:00:00.000Z'));
-    expect(result).toEqual({ applied: ['0001_initial', '0002_paused_status'], version: 2 });
+    expect(result).toEqual({
+      applied: ['0001_initial', '0002_paused_status', '0003_untimed_sessions'],
+      version: 3,
+    });
     expect(tables()).toEqual([
       'active_timer',
       'book_formats',
@@ -90,6 +93,7 @@ describe('migrate', () => {
     expect(db.prepare('SELECT * FROM schema_migrations').all()).toEqual([
       { version: 1, name: 'initial', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 2, name: 'paused_status', applied_at: '2026-11-14T12:00:00.000Z' },
+      { version: 3, name: 'untimed_sessions', applied_at: '2026-11-14T12:00:00.000Z' },
     ]);
     expect(db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
@@ -99,9 +103,19 @@ describe('migrate', () => {
     migrate(db, shippedMigrationsUpTo(1));
     seedVersion1();
     const before = db.prepare('SELECT * FROM books').all();
-    expect(migrate(db).applied).toContain('0002_paused_status');
+    const sessionsBefore = db.prepare('SELECT * FROM sessions').all();
+    expect(migrate(db).applied).toEqual(
+      expect.arrayContaining(['0002_paused_status', '0003_untimed_sessions']),
+    );
     expect(db.prepare('SELECT * FROM books').all()).toEqual(before);
-    expect(db.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 1 });
+    // Sessions keep every value and are marked as logged in the app.
+    expect(db.prepare('SELECT * FROM sessions').all()).toEqual(
+      sessionsBefore.map((row) => ({ ...row, source: 'app' })),
+    );
+    db.exec("UPDATE sessions SET duration_seconds = NULL WHERE id = 's1'");
+    expect(() => {
+      db.exec("UPDATE sessions SET source = 'kindle' WHERE id = 's1'");
+    }).toThrow(/CHECK/);
     expect(db.prepare('SELECT book_id FROM book_tags').all()).toEqual([{ book_id: 'b1' }]);
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     expect(

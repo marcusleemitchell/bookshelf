@@ -123,7 +123,8 @@ export function currentProgress(sessions: readonly ProgressSession[]): number | 
 /** Session fields needed to work out pages read and speed. */
 export interface MeasuredSession {
   startedAt: string;
-  durationSeconds: number;
+  /** Null when the reading time is unknown (imported sessions). */
+  durationSeconds: number | null;
   progressUnit: ProgressUnit;
   startValue: number | null;
   endValue: number | null;
@@ -190,7 +191,8 @@ export interface SpeedInput {
 /**
  * Reading speed per format type over sessions started within the last
  * `windowDays` days up to `now` (SPEC §4: 30 days). Formats without sessions
- * in the window are omitted. Zero-duration sessions are ignored.
+ * in the window are omitted. Zero-duration sessions and sessions with an
+ * unknown duration are ignored.
  */
 export function readingSpeeds(
   inputs: readonly SpeedInput[],
@@ -211,7 +213,8 @@ export function readingSpeeds(
   const byFormat = new Map<FormatType, Accumulator>();
   for (const { session, format } of inputs) {
     const started = new Date(session.startedAt).getTime();
-    if (started < cutoff || started > now.getTime() || session.durationSeconds <= 0) continue;
+    const seconds = session.durationSeconds;
+    if (started < cutoff || started > now.getTime() || seconds === null || seconds <= 0) continue;
     let acc = byFormat.get(format.format);
     if (!acc) {
       acc = {
@@ -227,7 +230,7 @@ export function readingSpeeds(
       byFormat.set(format.format, acc);
     }
     acc.sessions += 1;
-    acc.seconds += session.durationSeconds;
+    acc.seconds += seconds;
     if (format.format !== 'audiobook') {
       const hasPages =
         (session.progressUnit === 'pages' &&
@@ -236,18 +239,18 @@ export function readingSpeeds(
         (sessionPercentDelta(session) !== null && format.pageCount !== null);
       if (hasPages) {
         acc.pages += sessionPages(session, format);
-        acc.pageSeconds += session.durationSeconds;
+        acc.pageSeconds += seconds;
       }
     }
     const percentDelta = sessionPercentDelta(session);
     if (percentDelta !== null) {
       acc.percent += percentDelta;
-      acc.percentSeconds += session.durationSeconds;
+      acc.percentSeconds += seconds;
     }
     const audio = sessionAudioSeconds(session, format);
     if (audio !== null) {
       acc.audio += audio;
-      acc.audioSeconds += session.durationSeconds;
+      acc.audioSeconds += seconds;
     }
   }
   const order: FormatType[] = ['physical', 'kindle', 'audiobook'];
@@ -281,6 +284,7 @@ export interface FinishEstimate {
  * Estimated finish (SPEC §4): remaining percent ÷ recent percent-per-day,
  * where the rate is the progress made by sessions started in the last
  * `windowDays` local days (including today) divided by `windowDays`.
+ * Sessions with an unknown duration (imported) are left out of the rate.
  * Null when progress is unknown, already complete, or there is no recent progress.
  */
 export function estimateFinish(options: {
@@ -296,6 +300,7 @@ export function estimateFinish(options: {
   const windowStart = addDays(today, -(windowDays - 1));
   let progressed = 0;
   for (const session of sessions) {
+    if (session.durationSeconds === null) continue;
     const day = localDateKey(session.startedAt, timeZone);
     if (day < windowStart || day > today) continue;
     progressed += sessionPercentDelta(session) ?? 0;

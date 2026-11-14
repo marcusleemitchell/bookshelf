@@ -462,7 +462,7 @@ export function createNotionMirror(
         'Bookshelf ID': richText(s.id),
         Book: relation(bookPage(s.bookId)),
         Date: date(s.startedAt, s.endedAt),
-        Minutes: numberProp(Math.round(s.durationSeconds / 60)),
+        Minutes: numberProp(s.durationSeconds === null ? null : Math.round(s.durationSeconds / 60)),
         Format: select(formatLabels.get(s.formatId) ?? null),
         Unit: select(s.progressUnit),
         Start: numberProp(s.startValue),

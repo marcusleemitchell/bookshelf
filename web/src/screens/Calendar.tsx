@@ -25,7 +25,13 @@ import {
   todayKey,
   weekdayIndex,
 } from '../lib/dates.ts';
-import { formatProgressValue, plural } from '../lib/labels.ts';
+import {
+  dayTimeLabel,
+  formatProgressValue,
+  plural,
+  sessionDurationLabel,
+  unknownTimeLabel,
+} from '../lib/labels.ts';
 import { cacheKeys } from '../offline/cache.ts';
 import { href, paths } from '../router.ts';
 
@@ -106,12 +112,16 @@ function MonthGrid({
     (sum, day) => sum + day.entries.reduce((s, e) => s + e.minutes, 0),
     0,
   );
+  const untimed = data.days.reduce(
+    (sum, day) => sum + day.entries.reduce((s, e) => s + e.untimedSessions, 0),
+    0,
+  );
   return (
     <>
       <p className="small muted" role="status">
         {data.days.length === 0
           ? 'No reading recorded this month.'
-          : `${plural(data.days.length, 'day')} with reading · ${formatDuration(totalMinutes * 60)} in total`}
+          : `${plural(data.days.length, 'day')} with reading · ${formatDuration(totalMinutes * 60)} in total${untimed > 0 ? ` (plus ${plural(untimed, 'session')} with time unknown)` : ''}`}
       </p>
       <div className="calendar-grid" aria-hidden="true">
         {WEEKDAYS.map((name) => (
@@ -160,11 +170,12 @@ function DayCell({
 }) {
   const number = Number(day.slice(8));
   const minutes = entry?.entries.reduce((sum, e) => sum + e.minutes, 0) ?? 0;
+  const untimed = entry?.entries.reduce((sum, e) => sum + e.untimedSessions, 0) ?? 0;
   const classes = ['calendar-day', entry ? 'has-sessions' : '', isToday ? 'is-today' : '']
     .filter(Boolean)
     .join(' ');
   const label = entry
-    ? `${longDayLabel(day)}: ${entry.entries.map((e) => e.title).join(', ')}, ${formatDuration(minutes * 60)}`
+    ? `${longDayLabel(day)}: ${entry.entries.map((e) => e.title).join(', ')}, ${dayTimeLabel(minutes, untimed)}`
     : `${longDayLabel(day)}: no reading`;
   if (!entry) {
     return (
@@ -221,9 +232,9 @@ function DayDetail({ day, entry }: { day: string; entry: CalendarDay | undefined
                           {book?.title ?? 'Book'}
                         </a>
                         <p className="small muted">
-                          {formatTime(session.startedAt, timeZone)}–
-                          {formatTime(session.endedAt, timeZone)} ·{' '}
-                          {formatDuration(session.durationSeconds)}
+                          {session.source === 'bookpine'
+                            ? unknownTimeLabel(session)
+                            : `${formatTime(session.startedAt, timeZone)}–${formatTime(session.endedAt, timeZone)} · ${sessionDurationLabel(session)}`}
                         </p>
                         {session.endValue !== null && (
                           <p className="small">

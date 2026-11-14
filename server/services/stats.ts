@@ -1,7 +1,8 @@
 /**
  * Statistics and calendar (SPEC §5). Sessions are bucketed into the local
  * day (BOOKSHELF_TZ) on which they started; sessions of deleted books and
- * deleted sessions are excluded.
+ * deleted sessions are excluded. Sessions with an unknown duration count as
+ * sessions (and for the calendar and streaks) but add no time.
  */
 import {
   addDays,
@@ -191,8 +192,13 @@ function emptyTotals(): Totals {
   return { seconds: 0, sessions: 0, pages: 0 };
 }
 
+/** Known reading time of a session (0 when unknown). */
+function knownSeconds(session: Session): number {
+  return session.durationSeconds ?? 0;
+}
+
 function addSession(totals: Totals, item: StatSession): void {
-  totals.seconds += item.session.durationSeconds;
+  totals.seconds += knownSeconds(item.session);
   totals.sessions += 1;
   totals.pages += sessionPages(item.session, item.format);
 }
@@ -249,7 +255,11 @@ export function statsSummary(ctx: AppContext, range: DateRange): StatsSummary {
   return {
     from: range.from ?? null,
     to: range.to ?? null,
-    totals: { ...totals, booksFinished: loadFinishedReads(ctx, range).length },
+    totals: {
+      ...totals,
+      booksFinished: loadFinishedReads(ctx, range).length,
+      untimedSessions: items.filter((item) => item.session.durationSeconds === null).length,
+    },
     byFormat: sortedEntries(byFormat).map(([format, t]) => ({ format, ...t })),
     byGenre: sortedEntries(byGenre).map(([genre, t]) => ({ genre, ...t })),
     byTag: sortedEntries(byTag).map(([tagId, t]) => ({
@@ -270,23 +280,35 @@ export function statsDaily(ctx: AppContext, range: DateRange): StatsDaily {
   if (diffDays(from, to) + 1 > MAX_DAILY_RANGE_DAYS) {
     throw validationError(`Range must not exceed ${MAX_DAILY_RANGE_DAYS} days`);
   }
-  const byDay = new Map<
-    DateKey,
-    { seconds: number; pages: number; percent: number; sessions: number }
-  >();
+  interface DayTotals {
+    seconds: number;
+    pages: number;
+    percent: number;
+    sessions: number;
+    untimedSessions: number;
+  }
+  const empty = (): DayTotals => ({
+    seconds: 0,
+    pages: 0,
+    percent: 0,
+    sessions: 0,
+    untimedSessions: 0,
+  });
+  const byDay = new Map<DateKey, DayTotals>();
   for (const item of loadStatSessions(ctx, { from, to })) {
-    const day = byDay.get(item.day) ?? { seconds: 0, pages: 0, percent: 0, sessions: 0 };
-    day.seconds += item.session.durationSeconds;
+    const day = byDay.get(item.day) ?? empty();
+    day.seconds += knownSeconds(item.session);
     day.pages += sessionPages(item.session, item.format);
     day.percent += sessionPercentDelta(item.session) ?? 0;
     day.sessions += 1;
+    if (item.session.durationSeconds === null) day.untimedSessions += 1;
     byDay.set(item.day, day);
   }
   return {
     from,
     to,
     days: eachDay(from, to).map((date) => {
-      const day = byDay.get(date) ?? { seconds: 0, pages: 0, percent: 0, sessions: 0 };
+      const day = byDay.get(date) ?? empty();
       return {
         date,
         seconds: day.seconds,
@@ -294,6 +316,7 @@ export function statsDaily(ctx: AppContext, range: DateRange): StatsDaily {
         pages: day.pages,
         percent: Math.round(day.percent * 100) / 100,
         sessions: day.sessions,
+        untimedSessions: day.untimedSessions,
       };
     }),
   };
@@ -328,7 +351,8 @@ export function yearInReview(ctx: AppContext, year: number): YearInReview {
     addSession(months.get(monthKey(item.day)) as Totals, item);
     for (const author of item.book.authors) bump(authors, author, item);
     for (const genre of item.book.genres) bump(genres, genre, item);
-    if (!longest || item.session.durationSeconds > longest.session.durationSeconds) longest = item;
+    const seconds = item.session.durationSeconds;
+    if (seconds !== null && (!longest || seconds > knownSeconds(longest.session))) longest = item;
   }
   for (const read of finished) {
     (months.get(monthKey(read.day)) as { booksFinished: number }).booksFinished += 1;
@@ -356,7 +380,7 @@ export function yearInReview(ctx: AppContext, year: number): YearInReview {
       ? {
           sessionId: longest.session.id,
           bookId: longest.book.id,
-          seconds: longest.session.durationSeconds,
+          seconds: knownSeconds(longest.session),
           date: longest.day,
         }
       : null,
@@ -364,23 +388,29 @@ export function yearInReview(ctx: AppContext, year: number): YearInReview {
   };
 }
 
-/** `GET /api/calendar?month=YYYY-MM`: per-day books read, most minutes first. */
+/**
+ * `GET /api/calendar?month=YYYY-MM`: per-day books read, most minutes first.
+ * Sessions with an unknown duration put the book on the day without minutes.
+ */
 export function calendarMonth(ctx: AppContext, month: string): CalendarResponse {
   const range = monthRange(month);
-  const byDay = new Map<
-    DateKey,
-    Map<string, { title: string; coverUrl: string | null; seconds: number }>
-  >();
+  interface DayEntry {
+    title: string;
+    coverUrl: string | null;
+    seconds: number;
+    untimedSessions: number;
+  }
+  const byDay = new Map<DateKey, Map<string, DayEntry>>();
   for (const item of loadStatSessions(ctx, range)) {
-    const books =
-      byDay.get(item.day) ??
-      new Map<string, { title: string; coverUrl: string | null; seconds: number }>();
+    const books = byDay.get(item.day) ?? new Map<string, DayEntry>();
     const entry = books.get(item.book.id) ?? {
       title: item.book.title,
       coverUrl: coverSrc(item.book),
       seconds: 0,
+      untimedSessions: 0,
     };
-    entry.seconds += item.session.durationSeconds;
+    entry.seconds += knownSeconds(item.session);
+    if (item.session.durationSeconds === null) entry.untimedSessions += 1;
     books.set(item.book.id, entry);
     byDay.set(item.day, books);
   }
@@ -396,6 +426,7 @@ export function calendarMonth(ctx: AppContext, month: string): CalendarResponse 
             title: entry.title,
             coverUrl: entry.coverUrl,
             minutes: Math.round(entry.seconds / 60),
+            untimedSessions: entry.untimedSessions,
           }))
           .sort((a, b) => b.minutes - a.minutes || a.title.localeCompare(b.title, 'en-GB')),
       })),

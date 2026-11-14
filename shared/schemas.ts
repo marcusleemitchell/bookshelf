@@ -49,6 +49,8 @@ export const formatTypeSchema = z.enum(['physical', 'kindle', 'audiobook']);
 export const readOutcomeSchema = z.enum(['in_progress', 'finished', 'dnf']);
 export const progressUnitSchema = z.enum(['pages', 'percent', 'audio_seconds']);
 export const noteKindSchema = z.enum(['note', 'quote']);
+/** Where a session came from: logged in Bookshelf, or imported from Bookpine (SPEC §8). */
+export const sessionSourceSchema = z.enum(['app', 'bookpine']);
 export const goalKindSchema = z.enum(['books_per_year', 'pages_per_year', 'minutes_per_day']);
 export const ratingSchema = z
   .number()
@@ -62,6 +64,7 @@ export type FormatType = z.infer<typeof formatTypeSchema>;
 export type ReadOutcome = z.infer<typeof readOutcomeSchema>;
 export type ProgressUnit = z.infer<typeof progressUnitSchema>;
 export type NoteKind = z.infer<typeof noteKindSchema>;
+export type SessionSource = z.infer<typeof sessionSourceSchema>;
 export type GoalKind = z.infer<typeof goalKindSchema>;
 
 const timestamps = {
@@ -99,10 +102,16 @@ const formatFields = {
 const sessionFields = {
   startedAt: instantSchema,
   endedAt: instantSchema,
+  /**
+   * Reading time. Null = unknown (imported reading days): such sessions
+   * count for the calendar and streaks but not for time, speed or finish
+   * estimates (SPEC §4).
+   */
   durationSeconds: z
     .int()
     .min(0)
-    .max(7 * 86_400),
+    .max(7 * 86_400)
+    .nullable(),
   progressUnit: progressUnitSchema,
   startValue: z.number().min(0).nullable(),
   endValue: z.number().min(0).nullable(),
@@ -172,6 +181,7 @@ export const sessionSchema = z.object({
   /** Derived server-side from unit + format length; null when the length is unknown. */
   startPercent: z.number().min(0).max(100).nullable(),
   endPercent: z.number().min(0).max(100).nullable(),
+  source: sessionSourceSchema,
   ...timestamps,
 });
 export type Session = z.infer<typeof sessionSchema>;
@@ -367,7 +377,7 @@ export const sessionCreateSchema = z.object({
   readId: idSchema.optional(),
   startedAt: sessionFields.startedAt,
   endedAt: sessionFields.endedAt,
-  /** Defaults to endedAt − startedAt. */
+  /** Defaults to endedAt − startedAt; null records an unknown duration. */
   durationSeconds: sessionFields.durationSeconds.optional(),
   progressUnit: sessionFields.progressUnit,
   /** Defaults to the read's current progress converted into `progressUnit` (or 0). */
@@ -505,7 +515,12 @@ export const readingSpeedSchema = z.object({
 export const statsSummarySchema = z.object({
   from: dateKeySchema.nullable(),
   to: dateKeySchema.nullable(),
-  totals: z.object({ ...totalsFields, booksFinished: z.int().min(0) }),
+  totals: z.object({
+    ...totalsFields,
+    booksFinished: z.int().min(0),
+    /** Sessions with an unknown duration (counted in `sessions`, not in `seconds`). */
+    untimedSessions: z.int().min(0),
+  }),
   byFormat: z.array(z.object({ format: formatTypeSchema, ...totalsFields })),
   byGenre: z.array(z.object({ genre: z.string(), ...totalsFields })),
   byTag: z.array(z.object({ tagId: idSchema, name: z.string(), ...totalsFields })),
@@ -526,6 +541,8 @@ export const statsDailySchema = z.object({
       pages: z.int().min(0),
       percent: z.number().min(0),
       sessions: z.int().min(0),
+      /** Sessions with an unknown duration (counted in `sessions`, not in the minutes). */
+      untimedSessions: z.int().min(0),
     }),
   ),
 });
@@ -582,7 +599,10 @@ export const calendarSchema = z.object({
           title: z.string(),
           /** Relative cover URL (`/api/covers/:id`) or null. */
           coverUrl: z.string().nullable(),
+          /** Minutes of the day's sessions with a known duration. */
           minutes: z.int().min(0),
+          /** Sessions that day with an unknown duration (imported); shown as "time unknown". */
+          untimedSessions: z.int().min(0),
         }),
       ),
     }),
@@ -629,6 +649,8 @@ export const syncPayloadSchemas = {
     bookId: idSchema,
     formatId: idSchema,
     ...sessionFields,
+    /** Omitted by older clients: the stored row keeps its source ('app' when new). */
+    source: sessionSourceSchema.optional(),
   }),
   tag: z.object({ id: idSchema, ...tagFields }),
   note: z.object({ id: idSchema, bookId: idSchema, ...noteFields }),
@@ -679,11 +701,16 @@ export type SyncResponse = z.infer<typeof syncResponseSchema>;
 // Backups
 // ---------------------------------------------------------------------------
 
+/** Backups from schema version 1–2 have no session `source`: those sessions were logged in the app. */
+export const backupSessionSchema = sessionSchema.extend({
+  source: sessionSourceSchema.default('app'),
+});
+
 export const backupDataSchema = z.object({
   books: z.array(bookSchema),
   formats: z.array(bookFormatSchema),
   reads: z.array(readSchema),
-  sessions: z.array(sessionSchema),
+  sessions: z.array(backupSessionSchema),
   tags: z.array(tagSchema),
   notes: z.array(bookNoteSchema),
   goals: z.array(goalSchema),

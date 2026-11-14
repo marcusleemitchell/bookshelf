@@ -6,8 +6,10 @@ import {
   type BackupEnvelope,
   type BackupImportResponse,
   type BookDetail,
+  type Session,
 } from '../../shared/index.ts';
 import { loadMigrations } from '../db/migrate.ts';
+import { BACKUP_V1 } from '../test/fixtures/backup.ts';
 import { pruneSnapshots, SNAPSHOTS_TO_KEEP, writeSnapshot } from '../services/backup.ts';
 import { startSnapshotScheduler } from '../services/snapshots.ts';
 import { createTestEnv, type TestEnv } from '../test/helpers.ts';
@@ -186,6 +188,39 @@ describe('POST /api/backup/import', () => {
     expect(
       readdirSync(env.ctx.config.backupsDir).some((f) => f.startsWith('bookshelf-pre-import-')),
     ).toBe(true);
+  });
+
+  it('restores a schema version 1 backup: its sessions were logged in the app', async () => {
+    const res = await env.request<BackupImportResponse>('POST', '/api/backup/import', BACKUP_V1);
+    expect(res.status).toBe(200);
+    expect(res.body.imported).toMatchObject({ books: 1, formats: 1, reads: 1, sessions: 1 });
+    const sessions = await env.request<Session[]>('GET', '/api/sessions');
+    expect(sessions.body).toEqual([
+      expect.objectContaining({ durationSeconds: 1800, source: 'app', endPercent: 9.85 }),
+    ]);
+    const exported = backupEnvelopeSchema.parse(
+      (await env.request<BackupEnvelope>('GET', '/api/backup/export')).body,
+    );
+    expect(exported.schemaVersion).toBe(loadMigrations().length);
+    expect(exported.data.sessions[0]?.source).toBe('app');
+  });
+
+  it('round-trips untimed imported sessions and paused books', async () => {
+    const imported = structuredClone(BACKUP_V1) as unknown as BackupEnvelope;
+    const [book] = imported.data.books;
+    const [session] = imported.data.sessions;
+    if (!book || !session) throw new Error('fixture');
+    book.status = 'paused';
+    session.durationSeconds = null;
+    session.source = 'bookpine';
+    const res = await env.request('POST', '/api/backup/import', {
+      ...imported,
+      schemaVersion: loadMigrations().length,
+    });
+    expect(res.status).toBe(200);
+    const exported = (await env.request<BackupEnvelope>('GET', '/api/backup/export')).body;
+    expect(exported.data.books[0]?.status).toBe('paused');
+    expect(exported.data.sessions[0]).toMatchObject({ durationSeconds: null, source: 'bookpine' });
   });
 
   it('rejects other apps, newer schema versions and malformed files', async () => {

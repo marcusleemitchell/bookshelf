@@ -199,6 +199,29 @@ describe('POST /api/sessions', () => {
 });
 
 describe('PATCH/DELETE /api/sessions/:id', () => {
+  it('records an unknown duration and lets a duration be added later', async () => {
+    const book = await addBook();
+    const created = await logSession({
+      bookId: book.id,
+      formatId: formatId(book, 'physical'),
+      durationSeconds: null,
+      progressUnit: 'pages',
+      startValue: 0,
+      endValue: 10,
+    });
+    expect(created.body).toMatchObject({ durationSeconds: null, source: 'app' });
+    const timed = await env.request<Session>('PATCH', `/api/sessions/${created.body.id}`, {
+      durationSeconds: 1200,
+    });
+    expect(timed.status).toBe(200);
+    expect(timed.body).toMatchObject({ durationSeconds: 1200, source: 'app' });
+    expectError(
+      await env.request('PATCH', `/api/sessions/${created.body.id}`, { durationSeconds: -5 }),
+      400,
+      'validation_error',
+    );
+  });
+
   it('updates fields, re-derives percents and soft-deletes', async () => {
     const book = await addBook();
     const created = await logSession({

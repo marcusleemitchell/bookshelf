@@ -1,6 +1,7 @@
 /**
  * Reading goals (SPEC §4) with progress: books finished or pages read in
- * the goal's year, or minutes read today for the daily goal.
+ * the goal's year, or minutes read today for the daily goal (sessions with
+ * an unknown duration add no minutes).
  */
 import type { z } from 'zod';
 import {
@@ -20,7 +21,7 @@ export function goalProgress(ctx: AppContext, goal: Goal): number {
   if (goal.kind === 'minutes_per_day') {
     const day = today(ctx);
     const seconds = loadStatSessions(ctx, { from: day, to: day }).reduce(
-      (sum, item) => sum + item.session.durationSeconds,
+      (sum, item) => sum + (item.session.durationSeconds ?? 0),
       0,
     );
     return Math.round(seconds / 60);

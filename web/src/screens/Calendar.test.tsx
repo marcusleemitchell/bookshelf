@@ -53,6 +53,74 @@ describe('Calendar', () => {
     );
   });
 
+  it('shows imported days without minutes, as time unknown', async () => {
+    const imported = makeSession({
+      id: IDS.session2,
+      startedAt: '2026-11-07T12:00:00.000Z',
+      endedAt: '2026-11-07T12:00:00.000Z',
+      durationSeconds: null,
+      source: 'bookpine',
+      startValue: null,
+      endValue: null,
+      startPercent: null,
+      endPercent: null,
+      note: null,
+    });
+    const { user } = renderApp({
+      hash: '#/calendar',
+      routes: {
+        'GET /api/calendar': ok({
+          month: '2026-11',
+          days: [
+            {
+              date: '2026-11-07',
+              entries: [
+                {
+                  bookId: IDS.leGuin,
+                  title: 'The Left Hand of Darkness',
+                  coverUrl: null,
+                  minutes: 0,
+                  untimedSessions: 1,
+                },
+              ],
+            },
+            {
+              date: '2026-11-08',
+              entries: [
+                {
+                  bookId: IDS.leGuin,
+                  title: 'The Left Hand of Darkness',
+                  coverUrl: null,
+                  minutes: 25,
+                  untimedSessions: 1,
+                },
+              ],
+            },
+          ],
+        }),
+        'GET /api/sessions': ok([imported]),
+      },
+    });
+    expect(
+      await screen.findByText(
+        '2 days with reading · 25m in total (plus 2 sessions with time unknown)',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Sunday 8 November 2026: The Left Hand of Darkness, 25m + time unknown',
+      }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Saturday 7 November 2026: The Left Hand of Darkness, time unknown',
+      }),
+    );
+    const panel = await screen.findByRole('region', { name: 'Saturday 7 November 2026' });
+    expect(await within(panel).findByText('Time unknown · imported')).toBeInTheDocument();
+    expect(within(panel).queryByText(/0m/)).not.toBeInTheDocument();
+  });
+
   it('moves between months', async () => {
     const { user, server } = renderApp({ hash: '#/calendar' });
     await user.click(await screen.findByRole('link', { name: 'Previous month, October 2026' }));

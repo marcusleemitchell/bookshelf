@@ -104,6 +104,7 @@ export const sessionsTable = defineTable<Session>('sessions', [
   'startPercent',
   'endPercent',
   'note',
+  'source',
   ...syncTimestamps,
 ]);
 

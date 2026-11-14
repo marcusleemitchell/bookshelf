@@ -238,6 +238,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     startPercent: 29.61,
     endPercent: 40.13,
     note: 'Genly and Estraven cross the ice.',
+    source: 'app',
     ...stamps,
     ...overrides,
   });
@@ -325,6 +326,7 @@ export function daily(
       pages: day.pages ?? 0,
       percent: day.percent ?? 0,
       sessions: day.minutes > 0 ? 1 : 0,
+      untimedSessions: 0,
     })),
   });
 }
@@ -333,7 +335,7 @@ export function summary(overrides: Partial<StatsSummary> = {}): StatsSummary {
   return statsSummarySchema.parse({
     from: '2026-10-16',
     to: TODAY,
-    totals: { seconds: 45_000, sessions: 21, pages: 412, booksFinished: 2 },
+    totals: { seconds: 45_000, sessions: 21, pages: 412, booksFinished: 2, untimedSessions: 0 },
     byFormat: [
       { format: 'physical', seconds: 30_000, sessions: 14, pages: 412 },
       { format: 'audiobook', seconds: 15_000, sessions: 7, pages: 0 },
@@ -380,6 +382,7 @@ export function calendar(month = '2026-11'): CalendarResponse {
             title: 'The Left Hand of Darkness',
             coverUrl: `/api/covers/${IDS.leGuin}`,
             minutes: 30,
+            untimedSessions: 0,
           },
         ],
       },
@@ -391,8 +394,15 @@ export function calendar(month = '2026-11'): CalendarResponse {
             title: 'The Left Hand of Darkness',
             coverUrl: `/api/covers/${IDS.leGuin}`,
             minutes: 45,
+            untimedSessions: 0,
           },
-          { bookId: IDS.hailMary, title: 'Project Hail Mary', coverUrl: null, minutes: 20 },
+          {
+            bookId: IDS.hailMary,
+            title: 'Project Hail Mary',
+            coverUrl: null,
+            minutes: 20,
+            untimedSessions: 0,
+          },
         ],
       },
     ],

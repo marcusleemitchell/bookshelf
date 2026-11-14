@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { IDS, TIME_ZONE, daily, makeGoal } from '../test/fixtures.ts';
+import { IDS, TIME_ZONE, daily, makeGoal, summary } from '../test/fixtures.ts';
 import { renderApp } from '../test/render.tsx';
 import { ok } from '../test/server.ts';
 import { rangeBounds, toSeries } from './Stats.tsx';
@@ -85,6 +85,30 @@ describe('Stats', () => {
     // The rating has its own line in the narrow tile so it is never cut off.
     expect(screen.getByText('02/10/2026')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Rated 4½ stars' })).toHaveTextContent('★★★★½');
+  });
+
+  it('explains that sessions with unknown time are not in the time totals', async () => {
+    renderApp({
+      hash: '#/stats',
+      routes: {
+        'GET /api/stats/summary': ok(
+          summary({
+            totals: {
+              seconds: 45_000,
+              sessions: 24,
+              pages: 412,
+              booksFinished: 2,
+              untimedSessions: 3,
+            },
+          }),
+        ),
+      },
+    });
+    expect(
+      await screen.findByText(
+        '3 sessions with unknown time (imported) count as sessions but not towards reading time, minutes or speed.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('refetches when the range or year changes', async () => {
