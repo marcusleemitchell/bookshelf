@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isConstraintError, openDatabase, transaction, type Db } from './database.ts';
 import {
   currentSchemaVersion,
+  FOREIGN_KEYS_OFF_DIRECTIVE,
   loadMigrations,
   migrate,
   MigrationError,
@@ -90,6 +91,46 @@ describe('migrate', () => {
     expect(
       loadMigrations(migrationsDir({ 'README.md': 'ignored', '0001_a.sql': 'SELECT 1;' })),
     ).toHaveLength(1);
+  });
+
+  it('rebuilds a referenced table with foreign keys off when the directive is present', () => {
+    const migrations = migrationsDir({
+      '0001_a.sql': `CREATE TABLE parent (id TEXT PRIMARY KEY, kind TEXT CHECK (kind IN ('x')));
+        CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent (id));
+        INSERT INTO parent VALUES ('p1', 'x');
+        INSERT INTO child VALUES ('c1', 'p1');`,
+      '0002_rebuild.sql': `${FOREIGN_KEYS_OFF_DIRECTIVE}
+        CREATE TABLE parent_new (id TEXT PRIMARY KEY, kind TEXT CHECK (kind IN ('x', 'y')));
+        INSERT INTO parent_new (id, kind) SELECT id, kind FROM parent;
+        DROP TABLE parent;
+        ALTER TABLE parent_new RENAME TO parent;`,
+    });
+    expect(loadMigrations(migrations).map((m) => m.foreignKeysOff)).toEqual([false, true]);
+    expect(migrate(db, migrations).applied).toEqual(['0001_a', '0002_rebuild']);
+    db.prepare("INSERT INTO parent VALUES ('p2', 'y')").run();
+    expect(db.prepare('SELECT parent_id FROM child').all()).toEqual([{ parent_id: 'p1' }]);
+    expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+    // Enforcement is back on: an orphan child is refused.
+    expect(() => db.prepare("INSERT INTO child VALUES ('c2', 'missing')").run()).toThrow(
+      /FOREIGN KEY/,
+    );
+  });
+
+  it('refuses a foreign-keys-off migration that leaves violations, and re-enables enforcement', () => {
+    const migrations = migrationsDir({
+      '0001_a.sql': `CREATE TABLE parent (id TEXT PRIMARY KEY);
+        CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent (id));
+        INSERT INTO parent VALUES ('p1');
+        INSERT INTO child VALUES ('c1', 'p1');`,
+      '0002_lossy.sql': `${FOREIGN_KEYS_OFF_DIRECTIVE}
+        DELETE FROM parent;`,
+    });
+    expect(() => migrate(db, migrations)).toThrow(
+      /0002_lossy left 1 foreign key violation\(s\), e\.g\. child → parent/,
+    );
+    expect(currentSchemaVersion(db)).toBe(1);
+    expect(db.prepare('SELECT id FROM parent').all()).toEqual([{ id: 'p1' }]);
+    expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
   });
 
   it('refuses a database newer than the code', () => {

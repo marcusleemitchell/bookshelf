@@ -3,6 +3,12 @@
  * `server/migrations/NNNN_name.sql`, are applied in order inside a
  * transaction each, and are recorded in `schema_migrations`.
  * Migration files must not contain their own BEGIN/COMMIT.
+ *
+ * A migration whose first line is {@link FOREIGN_KEYS_OFF_DIRECTIVE} runs
+ * with foreign-key enforcement switched off, which SQLite requires for
+ * rebuilding a table that other tables reference (create new → copy → drop
+ * old → rename). `PRAGMA foreign_key_check` must then report no violations
+ * before the transaction commits; enforcement is always switched back on.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,10 +19,15 @@ export const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations', import.meta
 
 const FILE_RE = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 
+/** First line that makes a migration run with foreign keys off (table rebuilds). */
+export const FOREIGN_KEYS_OFF_DIRECTIVE = '-- migrate:foreign-keys-off';
+
 export interface Migration {
   version: number;
   name: string;
   sql: string;
+  /** True when the file starts with {@link FOREIGN_KEYS_OFF_DIRECTIVE}. */
+  foreignKeysOff: boolean;
 }
 
 export class MigrationError extends Error {
@@ -33,10 +44,12 @@ export function loadMigrations(dir: string = MIGRATIONS_DIR): Migration[] {
     if (!match) {
       throw new MigrationError(`Migration file "${file}" must be named NNNN_name.sql`);
     }
+    const sql = readFileSync(join(dir, file), 'utf8');
     return {
       version: Number(match[1]),
       name: match[2] as string,
-      sql: readFileSync(join(dir, file), 'utf8'),
+      sql,
+      foreignKeysOff: sql.split('\n', 1)[0]?.trim() === FOREIGN_KEYS_OFF_DIRECTIVE,
     };
   });
   migrations.forEach((migration, index) => {
@@ -67,6 +80,16 @@ export function currentSchemaVersion(db: Db): number {
   return row?.version ?? 0;
 }
 
+function assertNoForeignKeyViolations(db: Db, label: string): void {
+  const violations = all<{ table: string; parent: string }>(db, 'PRAGMA foreign_key_check');
+  if (violations.length > 0) {
+    const first = violations[0] as { table: string; parent: string };
+    throw new MigrationError(
+      `Migration ${label} left ${violations.length} foreign key violation(s), e.g. ${first.table} → ${first.parent}`,
+    );
+  }
+}
+
 export interface MigrationResult {
   applied: string[];
   version: number;
@@ -94,15 +117,23 @@ export function migrate(
   const applied: string[] = [];
   for (const migration of migrations) {
     if (appliedVersions.has(migration.version)) continue;
-    transaction(db, () => {
-      db.exec(migration.sql);
-      run(db, 'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
-        migration.version,
-        migration.name,
-        now().toISOString(),
-      ]);
-    });
-    applied.push(`${String(migration.version).padStart(4, '0')}_${migration.name}`);
+    const label = `${String(migration.version).padStart(4, '0')}_${migration.name}`;
+    // PRAGMA foreign_keys is a no-op inside a transaction, so switch it first.
+    if (migration.foreignKeysOff) db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      transaction(db, () => {
+        db.exec(migration.sql);
+        if (migration.foreignKeysOff) assertNoForeignKeyViolations(db, label);
+        run(db, 'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
+          migration.version,
+          migration.name,
+          now().toISOString(),
+        ]);
+      });
+    } finally {
+      if (migration.foreignKeysOff) db.exec('PRAGMA foreign_keys = ON');
+    }
+    applied.push(label);
   }
   return { applied, version: currentSchemaVersion(db) };
 }

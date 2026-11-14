@@ -46,7 +46,7 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 - Errors use `AppError` (`server/http/errors.ts`) and the `{ error: { code, message } }` envelope; add new codes to `errorCodeSchema`.
 - Services take an `AppContext` (`db`, `config`, `logger`, `fetch`, `now`, `sleep`). Never call global `fetch`, `Date.now()` or timers directly in services; inject them so tests stay deterministic.
 - Database writes that must be atomic go through `transaction()`. `transaction()` callbacks must be synchronous.
-- Schema changes: add a new `server/migrations/NNNN_name.sql` (next number, no gaps). Migrations are forward-only and must never drop or rewrite user data; no `BEGIN`/`COMMIT` inside the file. Schema changes need the user's approval first (global rule).
+- Schema changes: add a new `server/migrations/NNNN_name.sql` (next number, no gaps). Migrations are forward-only and must never drop or rewrite user data; no `BEGIN`/`COMMIT` inside the file. Table rebuilds (to change a `CHECK`/`NOT NULL`) start with `-- migrate:foreign-keys-off` so the runner disables foreign keys and verifies `PRAGMA foreign_key_check` before committing. Schema changes need the user's approval first (global rule).
 - IDs are UUIDs, timestamps ISO 8601 UTC with milliseconds; days are bucketed in `BOOKSHELF_TZ` by session start.
 - Logging: use the injected logger; never log tokens, API keys or full outbound URLs with query strings.
 
