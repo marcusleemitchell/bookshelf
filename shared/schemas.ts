@@ -701,6 +701,81 @@ export type SyncResponse = z.infer<typeof syncResponseSchema>;
 // Backups
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Imports (SPEC §8)
+// ---------------------------------------------------------------------------
+
+export const importSourceSchema = z.enum(['bookpine']);
+export type ImportSource = z.infer<typeof importSourceSchema>;
+export const importLinkEntitySchema = z.enum(['book', 'format', 'read', 'session', 'note']);
+export type ImportLinkEntity = z.infer<typeof importLinkEntitySchema>;
+
+/** Provenance of an imported row: which source record it came from and what was imported. */
+export const importLinkSchema = z.object({
+  source: importSourceSchema,
+  entity: importLinkEntitySchema,
+  externalId: z.string().min(1),
+  localId: idSchema,
+  /** Field values the import last wrote (the base for keeping the user's edits). */
+  imported: z.record(z.string(), z.unknown()),
+  importedAt: instantSchema,
+});
+export type ImportLink = z.infer<typeof importLinkSchema>;
+
+export const importWarningSchema = z.object({
+  /** The Bookpine slug concerned, or null for file-level warnings. */
+  slug: z.string().nullable(),
+  message: z.string(),
+});
+export type ImportWarning = z.infer<typeof importWarningSchema>;
+
+const importCounts = {
+  created: z.int().min(0),
+  updated: z.int().min(0),
+  unchanged: z.int().min(0),
+  /** Records deleted in Bookshelf (not re-created), or not imported for another reason. */
+  skipped: z.int().min(0),
+};
+
+/** Result of a Bookpine import or its dry-run preview. */
+export const bookpineReportSchema = z.object({
+  dryRun: z.boolean(),
+  /** Book rows read from the CSV. */
+  rows: z.int().min(0),
+  books: z.object({
+    ...importCounts,
+    /** Existing books (not imported before) that were linked instead of duplicated. */
+    matched: z.int().min(0),
+  }),
+  merges: z.array(z.object({ title: z.string(), slugs: z.array(z.string()).min(2) })),
+  formats: z.object(importCounts),
+  reads: z.object(importCounts),
+  sessions: z.object({
+    ...importCounts,
+    /** Imported sessions whose duration is (still) unknown. */
+    untimed: z.int().min(0),
+  }),
+  notes: z.object(importCounts),
+  tags: z.object({ created: z.int().min(0), names: z.array(z.string()) }),
+  /** Fields left as the user edited them instead of being overwritten. */
+  keptEdits: z.int().min(0),
+  enrichment: z.object({
+    /** Books that would be looked up (preview) — 0 after an import. */
+    pending: z.int().min(0),
+    found: z.int().min(0),
+    notFound: z.int().min(0),
+    failed: z.int().min(0),
+  }),
+  covers: z.object({ cached: z.int().min(0), failed: z.int().min(0) }),
+  warnings: z.array(importWarningSchema),
+  /** Pre-import snapshot file in `backups/` (null for a preview). */
+  snapshot: z.string().nullable(),
+});
+export type BookpineReport = z.infer<typeof bookpineReportSchema>;
+
+/** Largest Bookpine CSV accepted by the import endpoints. */
+export const MAX_BOOKPINE_CSV_BYTES = 5 * 1024 * 1024;
+
 /** Backups from schema version 1–2 have no session `source`: those sessions were logged in the app. */
 export const backupSessionSchema = sessionSchema.extend({
   source: sessionSourceSchema.default('app'),
@@ -715,6 +790,8 @@ export const backupDataSchema = z.object({
   notes: z.array(bookNoteSchema),
   goals: z.array(goalSchema),
   timer: activeTimerSchema.nullable(),
+  /** Import provenance (schema version 4+); absent in older backups. */
+  importLinks: z.array(importLinkSchema).default([]),
 });
 export type BackupData = z.infer<typeof backupDataSchema>;
 

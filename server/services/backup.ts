@@ -1,8 +1,9 @@
 /**
  * JSON backups (SPEC §5/§7): full export in a versioned envelope, and
  * all-or-nothing import that always writes a pre-import snapshot first.
- * Backups include soft-deleted rows. Server-internal state (settings, sync
- * op log, Notion page mapping) is not part of a backup.
+ * Backups include soft-deleted rows and import provenance (so a restored
+ * library can still be re-imported without duplicates). Server-internal state
+ * (settings, sync op log, Notion page mapping) is not part of a backup.
  */
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,6 +19,7 @@ import { isConstraintError, run, transaction } from '../db/database.ts';
 import { currentSchemaVersion } from '../db/migrate.ts';
 import { AppError } from '../http/errors.ts';
 import { listAllBooks, replaceBookTags, saveBook } from '../repositories/books.ts';
+import { deleteAllImportLinks, listImportLinks, saveImportLink } from '../repositories/imports.ts';
 import { findTimer, saveTimer } from '../repositories/records.ts';
 import {
   findMany,
@@ -45,6 +47,7 @@ export function exportBackup(ctx: AppContext): BackupEnvelope {
     notes: findMany(db, notesTable),
     goals: findMany(db, goalsTable),
     timer: findTimer(db) ?? null,
+    importLinks: listImportLinks(db),
   };
   return {
     app: 'bookshelf',
@@ -130,6 +133,7 @@ export function importBackup(ctx: AppContext, envelope: BackupEnvelope): BackupI
   try {
     transaction(ctx.db, () => {
       for (const table of USER_TABLES_CHILD_FIRST) run(ctx.db, `DELETE FROM ${table}`);
+      deleteAllImportLinks(ctx.db);
       for (const book of data.books) saveBook(ctx.db, book);
       for (const tag of data.tags) insertRow(ctx.db, tagsTable, tag);
       for (const book of data.books) replaceBookTags(ctx.db, book.id, book.tagIds, at);
@@ -139,6 +143,7 @@ export function importBackup(ctx: AppContext, envelope: BackupEnvelope): BackupI
       for (const note of data.notes) insertRow(ctx.db, notesTable, note);
       for (const goal of data.goals) insertRow(ctx.db, goalsTable, goal);
       if (data.timer) saveTimer(ctx.db, data.timer);
+      for (const link of data.importLinks) saveImportLink(ctx.db, link);
     });
   } catch (error) {
     if (isConstraintError(error)) {

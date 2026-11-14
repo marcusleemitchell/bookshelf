@@ -4,7 +4,7 @@ A personal, self-hosted reading tracker. Log reading sessions (time and progress
 
 It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Single user, no accounts.
 
-> Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. The Bookpine import is still to come (see [Roadmap](#roadmap)).
+> Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. It also imports your Bookpine history (see [Importing from Bookpine](#importing-from-bookpine)). Importing from Notion is not planned: it would hold the same data, and Notion stays a one-way mirror.
 
 In short: [set up](#setup) → [run it as a service](#running-as-a-service-start-at-login) → [publish it with Tailscale](#remote-access-with-tailscale-https-for-the-iphone) → [install it on the iPhone](#installing-on-the-iphone-home-screen) → [use it](#using-the-app).
 
@@ -171,6 +171,22 @@ The installed app picks up the new version by itself: the next launch (or the on
 
 - For a belt-and-braces copy, include `BOOKSHELF_DATA_DIR` in Time Machine.
 
+## Importing from Bookpine
+
+Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). The full rules are in [SPEC §8.1](docs/SPEC.md#81-bookpine-csv-import-adr-0009); in short:
+
+- **Preview first**: `POST /api/import/bookpine/preview` shows what would happen — books new, updated and merged (duplicate editions such as a paperback and a "(Movie Tie-In)" edition become one book with several formats), reads, sessions, tags and warnings — without changing anything:
+
+  ```sh
+  curl -X POST -H 'Content-Type: text/csv' --data-binary @bookpine-export.csv \
+    http://127.0.0.1:4380/api/import/bookpine/preview
+  ```
+
+- **Import**: `POST /api/import/bookpine` (same body) looks each book up for a cover, synopsis, genres and page count (about a second per book), saves a safety snapshot (`backups/bookshelf-pre-import-<timestamp>.json`) and imports everything in one go — if anything fails, nothing changes. Restore the snapshot (see [Backups and restore](#backups-and-restore)) to undo an import.
+- **Reading days have no time**: Bookpine records the days you read, not for how long, so imported sessions show as "Time unknown · imported". They appear in the calendar and count for your streak, but not for reading time, minutes, the daily goal, reading speed or finish estimates. Add a duration from the book's page (**Add time**) and the session counts fully.
+- **Re-importing is safe**: importing a newer export updates what changed in Bookpine and adds new readings, without duplicating anything. Changes you made in Bookshelf (a corrected title, a deleted session, an added duration, a removed tag) are kept. Books already in your library are linked rather than added twice.
+- Shelves become statuses (Read, Currently Reading, Want To Read, Paused); other shelves and lists become tags, as do `owned` and `private`. Reviews and your own notes become notes; the Goodreads data Bookpine keeps in notes is only used to fill in page counts and finish dates.
+
 ## Notion setup (optional)
 
 Bookshelf can mirror your library, sessions and notes into Notion. The mirror is one-way: edits made in Notion are overwritten and never come back, and restores always use the JSON backups.
@@ -280,7 +296,7 @@ iPhone / Mac browser ──HTTPS──> tailscale serve ──HTTP──> 127.0.
                                                            └─ outbound: Open Library, Google Books, Notion
 ```
 
-- `server/` — Hono app (`app.ts`), entry point (`index.ts`), configuration, logging, SQLite access and migrations (`db/`, `migrations/`), repositories, services (library, sessions, timer, lookup, stats, sync, backup, snapshots, Notion) and routes.
+- `server/` — Hono app (`app.ts`), entry point (`index.ts`), configuration, logging, SQLite access and migrations (`db/`, `migrations/`), repositories, services (library, sessions, timer, lookup, stats, sync, backup, snapshots, Notion, Bookpine import) and routes; `server/import/` parses and plans Bookpine exports.
 - `shared/` — the API contract (Zod schemas and types for every entity, request and response) and pure helpers: ISBN normalisation, timezone day bucketing, percent/progress/speed/estimated-finish/streak derivations, and `DD/MM/YYYY`/duration formatting.
 - `web/` — Vite + React PWA: a typed API client (every response parsed with the shared schemas), a hand-written hash router, the SPEC §6 screens, Recharts charts, the zxing-wasm barcode scanner, and the offline layer (Dexie outbox plus a cached read model). One plain stylesheet (`web/src/styles.css`) with light and dark palettes.
 - `scripts/` and `ops/` — tooling run directly by Node with no extra packages: the icon generator (`npm run icons`), the launchd service (`scripts/service.ts`, template `ops/com.bookshelf.server.plist`) and Tailscale serve (`scripts/tailscale.ts`), sharing `scripts/runtime.ts`.
@@ -295,10 +311,10 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 - [ADR 0006](docs/adr/0006-notion-one-way-mirror.md) — Notion as a one-way mirror
 - [ADR 0007](docs/adr/0007-offline-read-model-and-client-bookkeeping.md) — offline read model in IndexedDB and client-side read bookkeeping
 - [ADR 0008](docs/adr/0008-open-library-records-for-synopsis.md) — Open Library edition and work records supply synopsis and language
+- [ADR 0009](docs/adr/0009-bookpine-import.md) — Bookpine import: untimed sessions, merged editions and provenance
 
 ## Roadmap
 
-- **Bookpine import**: import the Bookpine CSV export (SPEC §8). Importing from Notion is not planned: it would hold the same data, and Notion stays a one-way mirror.
 - **Development-only `npm audit` advisories** (tracked): 12 advisories (2 low, 10 moderate), all in development tooling, none in the production dependency tree (`npm audit --omit=dev` reports 0). They come from three upstream issues — `minimatch` ReDoS ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) via `typescript-eslint`, `glob` ([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)) and `deepmerge` ([GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4)) via `vite-plugin-pwa`'s `workbox-build`. The suggested `npm audit fix --force` would downgrade those packages (breaking changes), so the fix is to upgrade them when patched releases are out; re-check with `npm audit` when upgrading dependencies.
 - **Log rotation** for the service logs (currently cleared by hand, see Troubleshooting).
 - **Search language**: title search prefers English editions (ADR 0008); make it configurable if needed.

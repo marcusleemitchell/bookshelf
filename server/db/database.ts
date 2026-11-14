@@ -60,6 +60,21 @@ export function transaction<T>(db: Db, fn: () => T): T {
   }
 }
 
+/**
+ * Runs `fn` inside a transaction that is always rolled back, so it can write
+ * freely and report what it would have done (dry runs). Must not be nested
+ * in another transaction. `fn` must be synchronous.
+ */
+export function rollbackOnly<T>(db: Db, fn: () => T): T {
+  if (db.isTransaction) throw new Error('rollbackOnly cannot run inside another transaction');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    return fn();
+  } finally {
+    db.exec('ROLLBACK');
+  }
+}
+
 /** True when `error` is a SQLite constraint violation (UNIQUE, FOREIGN KEY, CHECK, NOT NULL). */
 export function isConstraintError(error: unknown): error is Error & { errstr: string } {
   return (

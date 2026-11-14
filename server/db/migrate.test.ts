@@ -2,7 +2,7 @@ import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isConstraintError, openDatabase, transaction, type Db } from './database.ts';
+import { isConstraintError, openDatabase, rollbackOnly, transaction, type Db } from './database.ts';
 import {
   currentSchemaVersion,
   FOREIGN_KEYS_OFF_DIRECTIVE,
@@ -72,8 +72,8 @@ describe('migrate', () => {
   it('applies the shipped migrations to a fresh database', () => {
     const result = migrate(db, MIGRATIONS_DIR, () => new Date('2026-11-14T12:00:00.000Z'));
     expect(result).toEqual({
-      applied: ['0001_initial', '0002_paused_status', '0003_untimed_sessions'],
-      version: 3,
+      applied: ['0001_initial', '0002_paused_status', '0003_untimed_sessions', '0004_import_links'],
+      version: 4,
     });
     expect(tables()).toEqual([
       'active_timer',
@@ -82,6 +82,7 @@ describe('migrate', () => {
       'book_tags',
       'books',
       'goals',
+      'import_links',
       'notion_pages',
       'reads',
       'schema_migrations',
@@ -94,6 +95,7 @@ describe('migrate', () => {
       { version: 1, name: 'initial', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 2, name: 'paused_status', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 3, name: 'untimed_sessions', applied_at: '2026-11-14T12:00:00.000Z' },
+      { version: 4, name: 'import_links', applied_at: '2026-11-14T12:00:00.000Z' },
     ]);
     expect(db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
@@ -236,6 +238,27 @@ describe('database helpers', () => {
         .all()
         .map((r) => r['id']),
     ).toEqual(['a', 'b']);
+  });
+
+  it('rolls back a dry run whatever happens, and refuses to nest one', () => {
+    db.exec('CREATE TABLE t (id TEXT PRIMARY KEY)');
+    const count = rollbackOnly(db, () => {
+      db.prepare("INSERT INTO t VALUES ('a')").run();
+      return db.prepare('SELECT COUNT(*) AS n FROM t').get();
+    });
+    expect(count).toEqual({ n: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM t').get()).toEqual({ n: 0 });
+    expect(() =>
+      rollbackOnly(db, () => {
+        db.prepare("INSERT INTO t VALUES ('b')").run();
+        throw new Error('boom');
+      }),
+    ).toThrow('boom');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM t').get()).toEqual({ n: 0 });
+    expect(() => transaction(db, () => rollbackOnly(db, () => 1))).toThrow(
+      /cannot run inside another transaction/,
+    );
+    expect(db.isTransaction).toBe(false);
   });
 
   it('recognises constraint errors', () => {

@@ -13,6 +13,7 @@ import type { AppContext } from './context.ts';
 import { isConstraintError } from './db/database.ts';
 import { AppError } from './http/errors.ts';
 import { dataRoutes } from './routes/data.ts';
+import { importRoutes } from './routes/imports.ts';
 import { insightRoutes } from './routes/insights.ts';
 import { libraryRoutes } from './routes/library.ts';
 import { readingRoutes } from './routes/reading.ts';
@@ -77,11 +78,11 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Hono {
   });
 
   const api = new Hono();
-  // Backup imports have their own, larger limit (routes/data.ts).
+  // Backup and Bookpine imports have their own, larger limits (routes/data.ts, routes/imports.ts).
   api.use(
     '*',
     except(
-      '/api/backup/import',
+      ['/api/backup/import', '/api/import/*'],
       bodyLimit({
         maxSize: MAX_BODY_BYTES,
         onError: () => {
@@ -98,6 +99,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Hono {
   api.route('/', libraryRoutes(ctx));
   api.route('/', readingRoutes(ctx));
   api.route('/', dataRoutes(ctx, notion));
+  api.route('/', importRoutes(ctx));
   api.all('*', (c) =>
     c.json(errorBody('not_found', `No API route for ${c.req.method} ${c.req.path}`), 404),
   );
