@@ -56,6 +56,42 @@ Install refuses, with an explanation, if the port is already taken — for examp
 
 To preview the agent without installing it: `node scripts/service.ts plist`.
 
+## Remote access with Tailscale (HTTPS for the iPhone)
+
+The server only listens on `127.0.0.1`, so nothing on your network can reach it directly. [Tailscale](https://tailscale.com) gives your own devices a private network (a _tailnet_) and `tailscale serve` publishes the server on it over HTTPS, with a certificate Tailscale manages. HTTPS is what lets the iPhone install the app and use the camera.
+
+> Bookshelf has no login of its own: everyone who can reach your tailnet can use it. Use a personal tailnet that only your devices are in — not a work or shared one. Never use `tailscale funnel`, which would publish it to the internet.
+
+One-off set-up:
+
+1. **Install Tailscale on the Mac**: `brew install --cask tailscale-app`, or from the Mac App Store, or <https://tailscale.com/download/mac>. Open it and sign in.
+2. **Install Tailscale on the iPhone** from the App Store and sign in with the **same account**, so both are in the same tailnet. Leave the VPN switched on.
+3. **Enable MagicDNS and HTTPS certificates** in the Tailscale admin console at <https://login.tailscale.com/admin/dns>: turn on **MagicDNS** (on by default for new tailnets), then under **HTTPS Certificates** choose **Enable HTTPS**.
+4. **Start Bookshelf** as a service (`npm run service:install`, above) so it is always running.
+5. **Publish it on the tailnet**:
+
+   ```sh
+   npm run tailscale:serve
+   ```
+
+   This checks that Tailscale is signed in with HTTPS enabled (and tells you what to fix if not), runs `tailscale serve --bg <PORT>`, and prints the address, e.g. `https://my-mac.tail1234.ts.net/`. The setting survives restarts of the Mac and of Tailscale; you only run it once.
+
+6. **Install the app on the iPhone** (next section).
+
+Other commands:
+
+```sh
+npm run tailscale:status   # signed in? HTTPS enabled? the Bookshelf address, and whether the server answers
+npm run tailscale:off      # stop publishing Bookshelf on the tailnet (the server keeps running locally)
+```
+
+The scripts use `tailscale` from your PATH, or the CLI inside `/Applications/Tailscale.app`. If Tailscale isn't installed they say how to install it.
+
+### Keep the Mac reachable
+
+- The Mac must be **awake** for the iPhone to reach it (the app still opens offline and queues changes, see [Offline](#offline)). On a laptop: **System Settings → Battery → Options → Prevent automatic sleeping on power adapter when the display is off**; on a desktop Mac: **System Settings → Energy → Prevent automatic sleeping when the display is off**. The display can still turn off, and the Mac can stay locked.
+- Keep the **Mac and iPhone in the same timezone** (both set automatically is simplest). Days in the calendar, streaks and goals are counted in `BOOKSHELF_TZ` on the server — fixed to the Mac's timezone when the service was installed — while the iPhone shows times in its own zone.
+
 ## Commands
 
 | Command                     | What it does                                                                |
@@ -76,6 +112,9 @@ To preview the agent without installing it: `node scripts/service.ts plist`.
 | `npm run service:uninstall` | Stop and remove the launchd agent                                           |
 | `npm run service:status`    | Show whether the agent is installed, running and answering                  |
 | `npm run service:logs`      | Show the server logs (`-- -f` to follow, `-- -n 200` for more lines)        |
+| `npm run tailscale:serve`   | Publish Bookshelf on your tailnet over HTTPS and print the address          |
+| `npm run tailscale:status`  | Show Tailscale's state and the Bookshelf address                            |
+| `npm run tailscale:off`     | Stop publishing Bookshelf on your tailnet                                   |
 
 During development, point the server at a throwaway data directory so you never touch your real library, for example `BOOKSHELF_DATA_DIR=/tmp/bookshelf-dev npm run dev`.
 
@@ -95,9 +134,9 @@ Dates are shown as `DD/MM/YYYY` in the device's timezone; set `BOOKSHELF_TZ` to 
 
 ### Installing on the iPhone Home Screen
 
-The app is a PWA. Installing it needs HTTPS, which comes from `tailscale serve` (set up in phase 3, see [Roadmap](#roadmap)):
+The app is a PWA. Installing it needs HTTPS, which comes from `tailscale serve` (see [Remote access with Tailscale](#remote-access-with-tailscale-https-for-the-iphone)):
 
-1. On the iPhone, with Tailscale connected, open the Mac's `https://<mac-name>.<tailnet>.ts.net` address in **Safari**.
+1. On the iPhone, with Tailscale connected, open the address `npm run tailscale:serve` printed (`https://<mac-name>.<tailnet>.ts.net/`) in **Safari**.
 2. Tap **Share** → **Add to Home Screen** → **Add**.
 3. Launch **Bookshelf** from the Home Screen: it opens full screen, without Safari's toolbars.
 
