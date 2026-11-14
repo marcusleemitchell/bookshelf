@@ -278,6 +278,11 @@ p {
   min-width: 0;
 }
 
+/* A small action under a list item's text (e.g. "Add time"), not stretched. */
+.align-start {
+  align-self: flex-start;
+}
+
 .empty {
   text-align: center;
   padding: 24px 12px;

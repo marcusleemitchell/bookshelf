@@ -267,6 +267,50 @@ describe('Book detail', () => {
     });
   });
 
+  it('says how a closed read without recorded progress ended, and hides empty progress', async () => {
+    const day = makeSession({
+      id: IDS.session2,
+      bookId: IDS.hailMary,
+      readId: IDS.hailMaryRead,
+      formatId: IDS.hailMaryAudio,
+      progressUnit: 'percent',
+      durationSeconds: null,
+      source: 'bookpine',
+      startValue: null,
+      endValue: null,
+      startPercent: null,
+      endPercent: null,
+      note: null,
+    });
+    const { unmount } = renderApp({
+      hash: `#/books/${IDS.hailMary}`,
+      routes: bookRoutes({
+        'GET /api/books/:id': ok(hailMary({ progressPercent: null })),
+        'GET /api/sessions': ok([day]),
+      }),
+    });
+    expect(await screen.findByText('Finished on 02/10/2026')).toBeInTheDocument();
+    const sessions = (await screen.findByRole('heading', { name: 'Sessions' })).parentElement;
+    if (!sessions) throw new Error('no sessions section');
+    expect(await within(sessions).findByText(/Time unknown · imported/)).toBeInTheDocument();
+    expect(within(sessions).queryByText(/→/)).not.toBeInTheDocument();
+    unmount();
+
+    const stopped = hailMary({ progressPercent: null, status: 'dnf' });
+    const dnfRead = {
+      ...(stopped.currentRead as NonNullable<typeof stopped.currentRead>),
+      outcome: 'dnf' as const,
+    };
+    renderApp({
+      hash: `#/books/${IDS.hailMary}`,
+      routes: bookRoutes({
+        'GET /api/books/:id': ok({ ...stopped, currentRead: dnfRead, reads: [dnfRead] }),
+        'GET /api/sessions': ok([]),
+      }),
+    });
+    expect(await screen.findByText('Stopped on 02/10/2026')).toBeInTheDocument();
+  });
+
   it('lets the add-time form be cancelled', async () => {
     const untimed = makeSession({ durationSeconds: null });
     const { user } = renderApp({

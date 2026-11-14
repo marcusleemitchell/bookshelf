@@ -1,8 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { IDS, TIME_ZONE, daily, makeGoal, summary } from '../test/fixtures.ts';
+import { IDS, TIME_ZONE, TODAY, daily, makeGoal, summary } from '../test/fixtures.ts';
 import { renderApp } from '../test/render.tsx';
-import { ok } from '../test/server.ts';
+import { ok, type MockRequest } from '../test/server.ts';
 import { rangeBounds, toSeries } from './Stats.tsx';
 
 describe('rangeBounds', () => {
@@ -107,6 +107,28 @@ describe('Stats', () => {
     expect(
       await screen.findByText(
         '3 sessions with unknown time (imported) count as sessions but not towards reading time, minutes or speed.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('summarises a minutes chart whose reading has no known time', async () => {
+    const untimedDaily = (req: MockRequest) => {
+      const data = daily(
+        [{ date: req.query.get('to') ?? TODAY, minutes: 0 }],
+        req.query.get('from') ?? TODAY,
+        req.query.get('to') ?? TODAY,
+      );
+      return {
+        body: {
+          ...data,
+          days: data.days.map((d, i) => (i === 0 ? { ...d, sessions: 2, untimedSessions: 2 } : d)),
+        },
+      };
+    };
+    renderApp({ hash: '#/stats', routes: { 'GET /api/stats/daily': untimedDaily } });
+    expect(
+      await screen.findByText(
+        'No timed reading in this range. 2 sessions with time unknown not shown.',
       ),
     ).toBeInTheDocument();
   });

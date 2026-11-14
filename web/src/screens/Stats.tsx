@@ -171,6 +171,7 @@ export function Stats() {
             <Trends
               series={toSeries(data, bounds.byMonth, services.timeZone)}
               byMonth={bounds.byMonth}
+              untimed={data.days.reduce((sum, day) => sum + day.untimedSessions, 0)}
             />
           )}
         </ResourceView>
@@ -254,7 +255,16 @@ function SeriesBarChart({
   );
 }
 
-function Trends({ series, byMonth }: { series: SeriesPoint[]; byMonth: boolean }) {
+function Trends({
+  series,
+  byMonth,
+  untimed,
+}: {
+  series: SeriesPoint[];
+  byMonth: boolean;
+  /** Sessions in the range with an unknown duration (not in the minutes). */
+  untimed: number;
+}) {
   const per = byMonth ? 'month' : 'day';
   const totalMinutes = series.reduce((sum, p) => sum + p.minutes, 0);
   const totalPages = series.reduce((sum, p) => sum + p.pages, 0);
@@ -278,9 +288,12 @@ function Trends({ series, byMonth }: { series: SeriesPoint[]; byMonth: boolean }
         <ChartFigure
           label={`Minutes read per ${per}`}
           summary={
-            totalMinutes === 0
-              ? 'No reading in this range.'
-              : `${formatDuration(totalMinutes * 60)} over ${plural(active, per)} with reading${best && best.minutes > 0 ? `; most on ${best.label} (${best.minutes} min)` : ''}.`
+            (totalMinutes === 0
+              ? untimed > 0
+                ? 'No timed reading in this range.'
+                : 'No reading in this range.'
+              : `${formatDuration(totalMinutes * 60)} over ${plural(active, per)} with reading${best && best.minutes > 0 ? `; most on ${best.label} (${best.minutes} min)` : ''}.`) +
+            (untimed > 0 ? ` ${plural(untimed, 'session')} with time unknown not shown.` : '')
           }
           table={table}
         >

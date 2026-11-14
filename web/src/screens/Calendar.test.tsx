@@ -103,7 +103,7 @@ describe('Calendar', () => {
     });
     expect(
       await screen.findByText(
-        '2 days with reading · 25m in total (plus 2 sessions with time unknown)',
+        '2 days with reading · 25m in total, plus 2 sessions with time unknown',
       ),
     ).toBeInTheDocument();
     expect(
@@ -119,6 +119,34 @@ describe('Calendar', () => {
     const panel = await screen.findByRole('region', { name: 'Saturday 7 November 2026' });
     expect(await within(panel).findByText('Time unknown · imported')).toBeInTheDocument();
     expect(within(panel).queryByText(/0m/)).not.toBeInTheDocument();
+  });
+
+  it('says “time unknown” for a month with only imported days', async () => {
+    renderApp({
+      hash: '#/calendar',
+      routes: {
+        'GET /api/calendar': ok({
+          month: '2026-11',
+          days: [
+            {
+              date: '2026-11-07',
+              entries: [
+                {
+                  bookId: IDS.leGuin,
+                  title: 'The Left Hand of Darkness',
+                  coverUrl: null,
+                  minutes: 0,
+                  untimedSessions: 1,
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+    expect(
+      await screen.findByText('1 day with reading · time unknown (imported)'),
+    ).toBeInTheDocument();
   });
 
   it('moves between months', async () => {

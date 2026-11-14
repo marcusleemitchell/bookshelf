@@ -72,6 +72,19 @@ export function BookDetailScreen({ bookId }: { bookId: string }) {
 
 const RATING_OPTIONS = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5] as const;
 
+/** "34% read"; for a closed read without recorded progress, how it ended. */
+function progressText(book: BookDetail, timeZone: string): string {
+  if (book.progressPercent !== null) return `${formatPercent(book.progressPercent)} read`;
+  const read = book.currentRead;
+  if (read?.outcome === 'finished' && read.finishedAt) {
+    return `Finished on ${formatDate(read.finishedAt, timeZone)}`;
+  }
+  if (read?.outcome === 'dnf' && read.finishedAt) {
+    return `Stopped on ${formatDate(read.finishedAt, timeZone)}`;
+  }
+  return 'No progress recorded for this read yet.';
+}
+
 function BookBody({ book }: { book: BookDetail }) {
   const services = useServices();
   const { timeZone } = services;
@@ -145,9 +158,7 @@ function BookBody({ book }: { book: BookDetail }) {
         <h2 id="progress-heading">Progress</h2>
         <ProgressBar percent={book.progressPercent} label="Reading progress" large />
         <p>
-          {book.progressPercent === null
-            ? 'No progress recorded for this read yet.'
-            : `${formatPercent(book.progressPercent)} read`}
+          {progressText(book, timeZone)}
           {book.currentRead && book.currentRead.number > 1 && ` · read ${book.currentRead.number}`}
         </p>
         {estimate && (
@@ -305,11 +316,13 @@ function SessionsList({ book, sessions }: { book: BookDetail; sessions: Session[
                       {format && ` · ${FORMAT_LABELS[format.format]}`}
                     </span>
                   </p>
-                  <p className="small">
-                    {formatProgressValue(session.progressUnit, session.startValue)} →{' '}
-                    {formatProgressValue(session.progressUnit, session.endValue)}
-                    {session.endPercent !== null && ` (${formatPercent(session.endPercent)})`}
-                  </p>
+                  {(session.startValue !== null || session.endValue !== null) && (
+                    <p className="small">
+                      {formatProgressValue(session.progressUnit, session.startValue)} →{' '}
+                      {formatProgressValue(session.progressUnit, session.endValue)}
+                      {session.endPercent !== null && ` (${formatPercent(session.endPercent)})`}
+                    </p>
+                  )}
                   {session.note && <p className="small muted">{session.note}</p>}
                   {session.durationSeconds === null && (
                     <AddSessionTime session={session} timeZone={services.timeZone} />
@@ -356,7 +369,7 @@ function AddSessionTime({ session, timeZone }: { session: Session; timeZone: str
     return (
       <button
         type="button"
-        className="btn btn-ghost btn-small"
+        className="btn btn-ghost btn-small align-start"
         aria-label={`Add reading time for ${day}`}
         onClick={() => {
           setOpen(true);

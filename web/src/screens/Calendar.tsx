@@ -121,7 +121,7 @@ function MonthGrid({
       <p className="small muted" role="status">
         {data.days.length === 0
           ? 'No reading recorded this month.'
-          : `${plural(data.days.length, 'day')} with reading · ${formatDuration(totalMinutes * 60)} in total${untimed > 0 ? ` (plus ${plural(untimed, 'session')} with time unknown)` : ''}`}
+          : `${plural(data.days.length, 'day')} with reading · ${monthTimeLabel(totalMinutes, untimed)}`}
       </p>
       <div className="calendar-grid" aria-hidden="true">
         {WEEKDAYS.map((name) => (
@@ -153,6 +153,13 @@ function MonthGrid({
       </ol>
     </>
   );
+}
+
+/** "1h 35m in total", "time unknown (imported)" or "25m in total, plus 3 sessions with time unknown". */
+function monthTimeLabel(minutes: number, untimed: number): string {
+  if (untimed === 0) return `${formatDuration(minutes * 60)} in total`;
+  if (minutes === 0) return 'time unknown (imported)';
+  return `${formatDuration(minutes * 60)} in total, plus ${plural(untimed, 'session')} with time unknown`;
 }
 
 function DayCell({
