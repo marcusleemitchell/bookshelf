@@ -8,7 +8,7 @@ export default defineConfig({
         test: {
           name: 'node',
           environment: 'node',
-          include: ['server/**/*.test.ts', 'shared/**/*.test.ts'],
+          include: ['server/**/*.test.ts', 'shared/**/*.test.ts', 'scripts/**/*.test.ts'],
         },
       },
       {
@@ -23,13 +23,14 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      include: ['server/**/*.ts', 'shared/**/*.ts', 'web/src/**/*.{ts,tsx}'],
+      include: ['server/**/*.ts', 'shared/**/*.ts', 'scripts/**/*.ts', 'web/src/**/*.{ts,tsx}'],
       // Entry points run in their own process (server/index.test.ts boots it) or
       // only mount the app, so in-process coverage cannot see them.
       exclude: [
         '**/*.test.{ts,tsx}',
         'server/test/**',
         'server/index.ts',
+        'scripts/generate-icons.ts',
         'web/src/test/**',
         'web/src/main.tsx',
       ],
@@ -37,6 +38,7 @@ export default defineConfig({
       thresholds: {
         'server/**/*.ts': { lines: 90 },
         'shared/**/*.ts': { lines: 90 },
+        'scripts/**/*.ts': { lines: 90 },
       },
     },
   },
