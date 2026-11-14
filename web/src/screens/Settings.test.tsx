@@ -8,6 +8,7 @@ import {
   hailMary,
   leGuin,
   makeGoal,
+  bookpineReport,
   makeSession,
   notionStatus,
   tags,
@@ -208,6 +209,125 @@ describe('Settings', () => {
       backupEnvelopeSchema.parse(server.callsTo('POST', '/api/backup/import')[0]?.body).data
         .sessions,
     ).toHaveLength(1);
+  });
+
+  it('previews a Bookpine export, then imports it after confirmation', async () => {
+    const csv = 'slug,title\nx,"A, B"\n';
+    let finish: (reply: { body: unknown }) => void = () => undefined;
+    const { user, server } = renderApp({
+      hash: '#/settings',
+      routes: {
+        'POST /api/import/bookpine/preview': ok(bookpineReport()),
+        'POST /api/import/bookpine': () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      },
+    });
+    const input = await screen.findByLabelText('Bookpine export (CSV)');
+    await user.upload(input, new File([csv], 'export.csv', { type: 'text/csv' }));
+    const preview = await screen.findByRole('group', { name: 'Import preview' });
+    expect(server.callsTo('POST', '/api/import/bookpine/preview')[0]?.body).toBe(csv);
+    expect(
+      within(preview).getByText('20 rows in the export, with 1 book in several editions merged.'),
+    ).toBeInTheDocument();
+    expect(
+      within(preview).getByText(
+        'Books: 15 to add, 0 to update, 0 unchanged · 1 linked to books already in your library',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(preview).getByText(
+        'Reading days (sessions): 29 to add, 0 to update, 0 unchanged · 29 with time unknown',
+      ),
+    ).toBeInTheDocument();
+    expect(within(preview).getByText('New tags: favorites, owned')).toBeInTheDocument();
+    expect(
+      within(preview).getByText('Covers and details will be looked up for 40 books (about 2 min)'),
+    ).toBeInTheDocument();
+    expect(within(preview).getByText('Orchard at Dusk (2 editions)')).toBeInTheDocument();
+    expect(within(preview).getByText('Warnings (2)')).toBeInTheDocument();
+    expect(within(preview).getByText('copper-and-thyme-1019')).toBeInTheDocument();
+    expect(server.callsTo('POST', '/api/import/bookpine')).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    expect(await screen.findByText(/Importing — looking up covers/)).toBeInTheDocument();
+    expect(server.callsTo('POST', '/api/import/bookpine')[0]?.body).toBe(csv);
+    finish({
+      body: bookpineReport({
+        dryRun: false,
+        books: { created: 0, updated: 2, unchanged: 13, skipped: 1, matched: 0 },
+        keptEdits: 3,
+        enrichment: { pending: 0, found: 30, notFound: 8, failed: 2 },
+        covers: { cached: 28, failed: 2 },
+        warnings: [],
+        merges: [],
+        tags: { created: 0, names: [] },
+        snapshot: 'bookshelf-pre-import-2026-11-14T10-00-00-000Z.json',
+      }),
+    });
+    const result = await screen.findByRole('group', { name: 'Import result' });
+    expect(
+      within(result).getByText(
+        'Books: 0 added, 2 updated, 13 unchanged, 1 skipped (deleted in Bookshelf)',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(result).getByText('3 fields you changed in Bookshelf kept as they are'),
+    ).toBeInTheDocument();
+    expect(within(result).getByText('No new tags')).toBeInTheDocument();
+    expect(
+      within(result).getByText('Looked up: 30 found, 8 not found, 2 failed · 28 covers saved'),
+    ).toBeInTheDocument();
+    expect(
+      within(result).getByText(
+        'Safety snapshot: bookshelf-pre-import-2026-11-14T10-00-00-000Z.json',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Import' })).not.toBeInTheDocument();
+  });
+
+  it('lets a Bookpine preview be cancelled and shows preview errors', async () => {
+    const { user, server } = renderApp({
+      hash: '#/settings',
+      routes: {
+        'POST /api/import/bookpine/preview': ok(
+          bookpineReport({
+            merges: [],
+            warnings: [],
+            enrichment: { pending: 0, found: 0, notFound: 0, failed: 0 },
+          }),
+        ),
+      },
+    });
+    const input = await screen.findByLabelText('Bookpine export (CSV)');
+    await user.upload(input, new File(['x'], 'export.csv', { type: 'text/csv' }));
+    expect(await screen.findByRole('group', { name: 'Import preview' })).toBeInTheDocument();
+    expect(screen.queryByText(/will be looked up/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: 'Import preview' })).not.toBeInTheDocument();
+
+    server.on('POST /api/import/bookpine/preview', () =>
+      apiError(400, 'validation_error', 'This is not a Bookpine export: missing column slug'),
+    );
+    await user.upload(input, new File(['title\nDune\n'], 'other.csv', { type: 'text/csv' }));
+    expect(
+      await screen.findByText('This is not a Bookpine export: missing column slug'),
+    ).toBeInTheDocument();
+  });
+
+  it('says when the picked Bookpine file cannot be read', async () => {
+    vi.spyOn(FileReader.prototype, 'readAsText').mockImplementation(function (this: FileReader) {
+      this.dispatchEvent(new ProgressEvent('error'));
+    });
+    const { user, server } = renderApp({ hash: '#/settings' });
+    await user.upload(
+      await screen.findByLabelText('Bookpine export (CSV)'),
+      new File(['x'], 'export.csv', { type: 'text/csv' }),
+    );
+    expect(await screen.findByText('That file couldn’t be read.')).toBeInTheDocument();
+    expect(server.callsTo('POST', '/api/import/bookpine/preview')).toHaveLength(0);
+    vi.restoreAllMocks();
   });
 
   it('runs a Notion sync with a progress state', async () => {

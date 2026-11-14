@@ -1,7 +1,8 @@
 /**
  * Settings (SPEC §6.8): goals, tags, backup (JSON export via share sheet or
- * download, JSON import, Notion sync and status), server status and the
- * offline outbox (pending / failed changes, retry and discard).
+ * download, JSON import, Notion sync and status), the Bookpine import
+ * (pick CSV → preview → confirm → result), server status and the offline
+ * outbox (pending / failed changes, retry and discard).
  */
 import { useEffect, useState } from 'react';
 import {
@@ -14,6 +15,7 @@ import {
   tagListSchema,
   type BackupEnvelope,
   type BackupImportResponse,
+  type BookpineReport,
   type GoalKind,
   type GoalWithProgress,
   type NotionRunResult,
@@ -43,6 +45,7 @@ export function Settings() {
         <GoalsSection />
         <TagsSection />
         <BackupSection />
+        <BookpineSection />
         <NotionSection />
         <ServerSection />
         <OutboxSection />
@@ -420,6 +423,208 @@ function BackupSection() {
           </p>
         )}
         <ActionError error={importing.error} />
+      </div>
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------ Bookpine
+
+function countsLine(
+  label: string,
+  counts: { created: number; updated: number; unchanged: number; skipped: number },
+  dryRun: boolean,
+): string {
+  const parts = [
+    `${counts.created} ${dryRun ? 'to add' : 'added'}`,
+    `${counts.updated} ${dryRun ? 'to update' : 'updated'}`,
+    `${counts.unchanged} unchanged`,
+  ];
+  if (counts.skipped > 0) parts.push(`${counts.skipped} skipped (deleted in Bookshelf)`);
+  return `${label}: ${parts.join(', ')}`;
+}
+
+/** The preview or import report (SPEC §8.1) in words. */
+function BookpineReportView({ report }: { report: BookpineReport }) {
+  const { dryRun } = report;
+  const lookups = dryRun ? report.enrichment.pending : null;
+  return (
+    <div className="stack-sm" aria-label={dryRun ? 'Import preview' : 'Import result'} role="group">
+      <p className="small">
+        {plural(report.rows, 'row')} in the export
+        {report.merges.length > 0 &&
+          `, with ${plural(report.merges.length, 'book')} in several editions merged`}
+        .
+      </p>
+      <ul className="small">
+        <li>
+          {countsLine('Books', report.books, dryRun)}
+          {report.books.matched > 0 &&
+            ` · ${report.books.matched} linked to books already in your library`}
+        </li>
+        <li>{countsLine('Reads', report.reads, dryRun)}</li>
+        <li>
+          {countsLine('Reading days (sessions)', report.sessions, dryRun)} ·{' '}
+          {report.sessions.untimed} with time unknown
+        </li>
+        <li>{countsLine('Formats', report.formats, dryRun)}</li>
+        <li>{countsLine('Notes', report.notes, dryRun)}</li>
+        <li>
+          {report.tags.created === 0 ? 'No new tags' : `New tags: ${report.tags.names.join(', ')}`}
+        </li>
+        {report.keptEdits > 0 && (
+          <li>{plural(report.keptEdits, 'field')} you changed in Bookshelf kept as they are</li>
+        )}
+        {lookups !== null ? (
+          lookups > 0 && (
+            <li>
+              Covers and details will be looked up for {plural(lookups, 'book')} (about{' '}
+              {Math.max(1, Math.ceil((lookups * 2) / 60))} min)
+            </li>
+          )
+        ) : (
+          <li>
+            Looked up: {report.enrichment.found} found, {report.enrichment.notFound} not found,{' '}
+            {report.enrichment.failed} failed · {plural(report.covers.cached, 'cover')} saved
+          </li>
+        )}
+      </ul>
+      {report.merges.length > 0 && (
+        <details>
+          <summary className="small">Merged editions ({report.merges.length})</summary>
+          <ul className="small">
+            {report.merges.map((merge) => (
+              <li key={merge.slugs.join(',')}>
+                {merge.title} ({plural(merge.slugs.length, 'edition')})
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {report.warnings.length > 0 && (
+        <details>
+          <summary className="small">Warnings ({report.warnings.length})</summary>
+          <ul className="small">
+            {report.warnings.map((warning, index) => (
+              <li key={`${String(index)}-${warning.message}`}>
+                {warning.slug ? (
+                  <>
+                    <code>{warning.slug}</code>: {warning.message}
+                  </>
+                ) : (
+                  warning.message
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {report.snapshot && <p className="small muted">Safety snapshot: {report.snapshot}</p>}
+    </div>
+  );
+}
+
+function BookpineSection() {
+  const services = useServices();
+  const previewing = useAction();
+  const importing = useAction();
+  const [csv, setCsv] = useState<string | null>(null);
+  const [preview, setPreview] = useState<BookpineReport | null>(null);
+  const [result, setResult] = useState<BookpineReport | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  const pick = async (file: File) => {
+    setFileError(null);
+    setPreview(null);
+    setResult(null);
+    importing.clearError();
+    let text: string;
+    try {
+      text = await readFileText(file);
+    } catch {
+      setFileError('That file couldn’t be read.');
+      return;
+    }
+    setCsv(text);
+    previewing.run(async () => {
+      setPreview(await services.api.previewBookpine(text));
+    });
+  };
+
+  const cancel = () => {
+    setCsv(null);
+    setPreview(null);
+  };
+
+  return (
+    <section className="section" aria-labelledby="settings-bookpine">
+      <h2 id="settings-bookpine">Import from Bookpine</h2>
+      <div className="card stack-sm">
+        <p className="small muted">
+          Import your Bookpine CSV export. You’ll see what would change before anything is saved;
+          importing again later only adds and updates what changed in Bookpine.
+        </p>
+        <div className="field">
+          <label htmlFor="bookpine-file">Bookpine export (CSV)</label>
+          <input
+            id="bookpine-file"
+            type="file"
+            accept=".csv,text/csv"
+            disabled={previewing.busy || importing.busy}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void pick(file);
+            }}
+          />
+        </div>
+        {fileError && (
+          <p className="error-text" role="alert">
+            {fileError}
+          </p>
+        )}
+        {previewing.busy && <p role="status">Checking the export…</p>}
+        <ActionError error={previewing.error} />
+        {preview && csv !== null && !result && (
+          <div className="stack-sm">
+            <h3>Preview</h3>
+            <BookpineReportView report={preview} />
+            {importing.busy ? (
+              <p role="status">
+                Importing — looking up covers and details can take a few minutes. Keep this page
+                open.
+              </p>
+            ) : (
+              <div className="row">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    importing.run(async () => {
+                      const report = await services.api.importBookpine(csv);
+                      setResult(report);
+                      setPreview(null);
+                      setCsv(null);
+                      invalidate(services);
+                    });
+                  }}
+                >
+                  Import
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={cancel}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        <ActionError error={importing.error} />
+        {result && (
+          <div className="stack-sm" role="status">
+            <h3>Imported</h3>
+            <BookpineReportView report={result} />
+          </div>
+        )}
       </div>
     </section>
   );

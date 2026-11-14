@@ -116,7 +116,7 @@ Open Bookshelf from the Home Screen (or <http://127.0.0.1:4380> on the Mac). The
 - **Log session** — from a book or the timer: format, when you read, and progress in pages, percent or audiobook position (`h:mm:ss`).
 - **Calendar** — each day shows the covers of what you read; tap a day for its sessions.
 - **Stats** — week / month / year / all time: reading time, pages and progress charts, breakdowns by format, genre, tag and author, reading speed, goals and a year in review.
-- **Settings** — goals, tags, backup export/import, Notion sync, server status and offline changes.
+- **Settings** — goals, tags, backup export/import, Bookpine import, Notion sync, server status and offline changes.
 
 A typical day: tap **Start timer** on Today when you sit down to read (or put the audiobook on), **Stop & log** when you finish and enter where you got to — the page, the percentage Kindle shows, or the audiobook position. Forgot the timer? **Log** on a book records a session after the fact. Adding a book takes a barcode scan or a search; Open Library supplies the cover, synopsis and page count, which you can correct before saving.
 
@@ -173,7 +173,7 @@ The installed app picks up the new version by itself: the next launch (or the on
 
 ## Importing from Bookpine
 
-Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). The full rules are in [SPEC §8.1](docs/SPEC.md#81-bookpine-csv-import-adr-0009); in short:
+Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). In the app: **Settings → Import from Bookpine**, pick the CSV, check the preview (what would be added, updated and merged, plus any warnings), then **Import**. The same is available over HTTP. The full rules are in [SPEC §8.1](docs/SPEC.md#81-bookpine-csv-import-adr-0009); in short:
 
 - **Preview first**: `POST /api/import/bookpine/preview` shows what would happen — books new, updated and merged (duplicate editions such as a paperback and a "(Movie Tie-In)" edition become one book with several formats), reads, sessions, tags and warnings — without changing anything:
 

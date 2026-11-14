@@ -51,6 +51,15 @@ function match(pattern: string, path: string): Record<string, string> | null {
   );
 }
 
+/** JSON bodies are parsed; other text (e.g. a CSV upload) is kept as a string. */
+function parseBody(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
 export function createMockServer(routes: RouteTable = {}): MockServer {
   const table = new Map(Object.entries(routes));
   const server: MockServer = {
@@ -67,7 +76,7 @@ export function createMockServer(routes: RouteTable = {}): MockServer {
         'http://localhost',
       );
       const method = (init?.method ?? 'GET').toUpperCase();
-      const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
+      const body = typeof init?.body === 'string' ? parseBody(init.body) : undefined;
       if (server.offline) throw new TypeError('Load failed');
       for (const [route, handler] of table) {
         const [routeMethod, pattern = ''] = route.split(' ');

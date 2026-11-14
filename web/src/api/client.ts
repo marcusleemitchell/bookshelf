@@ -19,6 +19,7 @@ import {
   bookFormatSchema,
   bookListSchema,
   bookNoteSchema,
+  bookpineReportSchema,
   calendarSchema,
   errorResponseSchema,
   goalListSchema,
@@ -134,13 +135,24 @@ export function createApiClient(options: ApiClientOptions = {}) {
     query: Query | undefined,
     body: unknown,
     signal: AbortSignal | undefined,
+    /** Sends `text` with this content type instead of a JSON body. */
+    raw?: { text: string; type: string },
   ): Promise<{ status: number; json: unknown }> {
     let response: Response;
+    let headers: Record<string, string> = {};
+    let payload: string | null = null;
+    if (raw) {
+      headers = { 'Content-Type': raw.type };
+      payload = raw.text;
+    } else if (body !== undefined) {
+      headers = { 'Content-Type': 'application/json' };
+      payload = JSON.stringify(body);
+    }
     try {
       response = await doFetch(buildPath(`/api${path}`, query), {
         method,
-        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-        body: body === undefined ? null : JSON.stringify(body),
+        headers,
+        body: payload,
         signal: signal ?? null,
       });
     } catch (error) {
@@ -188,6 +200,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
   ): Promise<z.output<S>> {
     const { json } = await send(method, path, options.query, options.body, options.signal);
     return parse(options.schema, json);
+  }
+
+  /** POSTs a CSV file's text (Bookpine imports) and parses the response with `schema`. */
+  async function postCsv<S extends z.ZodType>(path: string, csv: string, schema: S) {
+    const { json } = await send('POST', path, undefined, undefined, undefined, {
+      text: csv,
+      type: 'text/csv',
+    });
+    return parse(schema, json);
   }
 
   async function requestNoContent(method: string, path: string): Promise<void> {
@@ -304,6 +325,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request('POST', '/backup/import', { body: envelope, schema: backupImportResponseSchema }),
     notionRun: () => request('POST', '/backup/notion', { schema: notionRunResultSchema }),
     notionStatus: () => request('GET', '/backup/notion/status', { schema: notionStatusSchema }),
+
+    /** Dry run of a Bookpine CSV import: what would change (writes nothing). */
+    previewBookpine: (csv: string) =>
+      postCsv('/import/bookpine/preview', csv, bookpineReportSchema),
+    /** Imports a Bookpine CSV export (lookups can take a few minutes). */
+    importBookpine: (csv: string) => postCsv('/import/bookpine', csv, bookpineReportSchema),
   };
 }
 

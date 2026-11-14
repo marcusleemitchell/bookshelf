@@ -10,6 +10,7 @@ import {
   bookFormatSchema,
   bookListItemSchema,
   bookNoteSchema,
+  bookpineReportSchema,
   calendarSchema,
   goalWithProgressSchema,
   readSchema,
@@ -26,6 +27,7 @@ import {
   type BookFormat,
   type BookListItem,
   type BookNote,
+  type BookpineReport,
   type CalendarResponse,
   type GoalWithProgress,
   type Read,
@@ -472,3 +474,27 @@ export const notionStatus = {
   lastError: null,
   lastResult: null,
 };
+
+/** A Bookpine import report (preview by default) with fictional slugs. */
+export function bookpineReport(overrides: Partial<BookpineReport> = {}): BookpineReport {
+  return bookpineReportSchema.parse({
+    dryRun: true,
+    rows: 20,
+    books: { created: 15, updated: 0, unchanged: 0, skipped: 0, matched: 1 },
+    merges: [{ title: 'Orchard at Dusk', slugs: ['orchard-at-dusk-1003', 'orchard-at-dusk-1004'] }],
+    formats: { created: 18, updated: 0, unchanged: 0, skipped: 0 },
+    reads: { created: 12, updated: 0, unchanged: 0, skipped: 0 },
+    sessions: { created: 29, updated: 0, unchanged: 0, skipped: 0, untimed: 29 },
+    notes: { created: 2, updated: 0, unchanged: 0, skipped: 0 },
+    tags: { created: 2, names: ['favorites', 'owned'] },
+    keptEdits: 0,
+    enrichment: { pending: 40, found: 0, notFound: 0, failed: 0 },
+    covers: { cached: 0, failed: 0 },
+    warnings: [
+      { slug: 'copper-and-thyme-1019', message: 'Ignored the invalid ISBN-13 "9780000000000"' },
+      { slug: null, message: 'Not merged (same title, different first author): a-1, b-2' },
+    ],
+    snapshot: null,
+    ...overrides,
+  });
+}

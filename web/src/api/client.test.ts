@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { goalWithProgressSchema } from '../../../shared/index.ts';
-import { IDS, health, leGuin, library, makeGoal } from '../test/fixtures.ts';
+import { IDS, bookpineReport, health, leGuin, library, makeGoal } from '../test/fixtures.ts';
 import { apiError, createMockServer, ok } from '../test/server.ts';
 import { ApiError, OfflineError, createApiClient, errorMessage, isOfflineError } from './client.ts';
 
@@ -33,6 +33,29 @@ describe('createApiClient', () => {
     expect(book.rating).toBe(4);
     expect(server.calls[0]?.body).toEqual({ rating: 4 });
     expect(server.calls[0]?.params['id']).toBe(IDS.leGuin);
+  });
+
+  it('sends a Bookpine CSV as text/csv and parses the report', async () => {
+    const report = bookpineReport();
+    const fetchSpy = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(report), { headers: { 'content-type': 'application/json' } }),
+      ),
+    );
+    const api = createApiClient({ fetch: fetchSpy });
+    expect(await api.previewBookpine('slug,title\n')).toEqual(report);
+    await api.importBookpine('slug,title\n');
+    expect(fetchSpy.mock.calls.map((call: unknown[]) => [call[0], call[1]])).toEqual([
+      [
+        '/api/import/bookpine/preview',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'text/csv' },
+          body: 'slug,title\n',
+        }),
+      ],
+      ['/api/import/bookpine', expect.objectContaining({ body: 'slug,title\n' })],
+    ]);
   });
 
   it('turns error envelopes into ApiError with code and status', async () => {
