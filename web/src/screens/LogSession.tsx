@@ -1,6 +1,6 @@
 /**
  * Log session (SPEC §6.5): book, format, start/end or duration, progress in
- * the format's natural unit (pages / h:mm:ss) with a toggle to percent, and a
+ * the format's natural unit (pages / h:mm:ss) and percent side by side, and a
  * note. From the timer ("Stop & log") it is prefilled from `GET /api/timer`
  * (`elapsedSeconds`, `serverTime`) and the timer is discarded once the
  * session is saved. Works offline via the outbox.
@@ -12,7 +12,6 @@ import {
   computePercent,
   formatDuration,
   percentToUnit,
-  progressUnitError,
   timerElapsedSeconds,
   timerResponseSchema,
   type BookDetail,
@@ -31,6 +30,7 @@ import {
   formatSummary,
   naturalUnit,
   parseProgressInput,
+  plural,
   progressInputValue,
 } from '../lib/labels.ts';
 
@@ -185,6 +185,100 @@ function prefill(
   };
 }
 
+/**
+ * One From/To row: the natural-unit box and the percent box. `source` is the
+ * box the user typed in last; the other is converted from it and the session
+ * is saved in the unit that was typed.
+ */
+interface ProgressRow {
+  natural: string;
+  percent: string;
+  source: 'natural' | 'percent';
+}
+
+/** `value` in `from` converted to `to`; null when the format's length is unknown. */
+function convert(
+  from: ProgressUnit,
+  to: ProgressUnit,
+  value: number,
+  format: BookFormat,
+): number | null {
+  // The start of a book is the start in every unit, length known or not.
+  if (value === 0) return 0;
+  return percentToUnit(to, computePercent(from, value, format), format);
+}
+
+/** A row typed in its `source` box, with the other box converted (blank when it can't be). */
+function rowFrom(source: ProgressRow['source'], text: string, format: BookFormat): ProgressRow {
+  const natural = naturalUnit(format.format);
+  const from: ProgressUnit = source === 'percent' ? 'percent' : natural;
+  const to: ProgressUnit = source === 'percent' ? natural : 'percent';
+  const parsed = parseProgressInput(from, text);
+  const converted =
+    parsed.ok && parsed.value !== null
+      ? progressInputValue(to, convert(from, to, parsed.value, format))
+      : '';
+  return source === 'percent'
+    ? { natural: converted, percent: text, source }
+    : { natural: text, percent: converted, source };
+}
+
+/** The From row prefilled from the book's current progress (0 when there is none). */
+function startRow(book: BookDetail, format: BookFormat): ProgressRow {
+  const percent = book.progressPercent ?? 0;
+  const unit = naturalUnit(format.format);
+  const natural = convert('percent', unit, percent, format);
+  return natural === null
+    ? rowFrom('percent', progressInputValue('percent', percent), format)
+    : rowFrom('natural', progressInputValue(unit, natural), format);
+}
+
+const EMPTY_ROW: ProgressRow = { natural: '', percent: '', source: 'natural' };
+
+/** True when the row's typed value is a percent (a blank box doesn't count). */
+function typedInPercent(row: ProgressRow): boolean {
+  return row.source === 'percent' && row.percent.trim() !== '';
+}
+
+type RowValue = { ok: true; value: number | null } | { ok: false; error: string };
+
+/** The row's value in `unit`, checking what the user typed. */
+function rowValue(row: ProgressRow, unit: ProgressUnit, format: BookFormat): RowValue {
+  const typedUnit = row.source === 'percent' ? 'percent' : naturalUnit(format.format);
+  const typed = parseProgressInput(typedUnit, row.source === 'percent' ? row.percent : row.natural);
+  if (!typed.ok || typed.value === null || typedUnit === unit) return typed;
+  const value = convert(typedUnit, unit, typed.value, format);
+  if (value === null) {
+    const natural = format.format === 'audiobook' ? 'h:mm:ss' : 'pages';
+    return {
+      ok: false,
+      error: `the length isn’t known, so this can’t be converted to %. Enter From and To both in ${natural} or both in %.`,
+    };
+  }
+  return { ok: true, value };
+}
+
+/** "30 pages · +9.87%" or "54m listened · +8.2%"; null until both rows have values. */
+function progressSummary(start: ProgressRow, end: ProgressRow, format: BookFormat): string | null {
+  const unit = naturalUnit(format.format);
+  const delta = (u: ProgressUnit, from: string, to: string): number | null => {
+    const a = parseProgressInput(u, from);
+    const b = parseProgressInput(u, to);
+    if (!a.ok || !b.ok || a.value === null || b.value === null || b.value < a.value) return null;
+    return b.value - a.value;
+  };
+  const parts: string[] = [];
+  const natural = delta(unit, start.natural, end.natural);
+  if (natural !== null) {
+    parts.push(
+      unit === 'audio_seconds' ? `${formatDuration(natural)} listened` : plural(natural, 'page'),
+    );
+  }
+  const percent = delta('percent', start.percent, end.percent);
+  if (percent !== null) parts.push(`+${String(Math.round(percent * 100) / 100)}%`);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 function SessionForm({
   book,
   timer,
@@ -200,19 +294,16 @@ function SessionForm({
   const [sessionId] = useState(() => services.newId());
   const [formatId, setFormatId] = useState(initial.formatId);
   const format = book.formats.find((f) => f.id === formatId) ?? book.formats[0];
-  const [unit, setUnit] = useState<ProgressUnit>(() =>
-    format ? naturalUnit(format.format) : 'percent',
-  );
   const [mode, setMode] = useState<TimingMode>('range');
   const [started, setStarted] = useState(toLocalInput(initial.startedAt, timeZone));
   const [ended, setEnded] = useState(toLocalInput(initial.endedAt, timeZone));
   // Exact seconds until the user edits the minutes (keeps the timer's value).
   const [durationSeconds, setDurationSeconds] = useState(initial.durationSeconds);
   const [durationTouched, setDurationTouched] = useState(timer !== null);
-  const [startText, setStartText] = useState(() =>
-    format ? progressInputValue(unit, percentToUnit(unit, book.progressPercent, format) ?? 0) : '',
+  const [startProgress, setStartProgress] = useState(() =>
+    format ? startRow(book, format) : EMPTY_ROW,
   );
-  const [endText, setEndText] = useState('');
+  const [endProgress, setEndProgress] = useState(EMPTY_ROW);
   const [note, setNote] = useState('');
   const [validation, setValidation] = useState<string | null>(null);
   const { busy, error, run } = useAction();
@@ -231,21 +322,8 @@ function SessionForm({
     );
   }
 
-  const naturalFor = (f: BookFormat) => naturalUnit(f.format);
-  const usingPercent = unit === 'percent';
-
-  const convertText = (text: string, from: ProgressUnit, to: ProgressUnit, f: BookFormat) => {
-    const parsed = parseProgressInput(from, text);
-    if (!parsed.ok || parsed.value === null) return parsed.ok ? '' : text;
-    const percent = computePercent(from, parsed.value, f);
-    return progressInputValue(to, percentToUnit(to, percent, f));
-  };
-
-  const changeUnit = (to: ProgressUnit) => {
-    setStartText(convertText(startText, unit, to, format));
-    setEndText(convertText(endText, unit, to, format));
-    setUnit(to);
-  };
+  const natural = naturalUnit(format.format);
+  const summary = progressSummary(startProgress, endProgress, format);
 
   const recomputeDuration = (startValue: string, endValue: string) => {
     if (durationTouched) return;
@@ -282,17 +360,14 @@ function SessionForm({
       setValidation('A session can last at most 7 days.');
       return;
     }
-    const unitError = progressUnitError(unit, format.format);
-    if (unitError) {
-      setValidation(unitError);
-      return;
-    }
-    const startValue = parseProgressInput(unit, startText);
+    // Saved in the unit the user typed: percent when either row was typed as %.
+    const unit = typedInPercent(startProgress) || typedInPercent(endProgress) ? 'percent' : natural;
+    const startValue = rowValue(startProgress, unit, format);
     if (!startValue.ok) {
       setValidation(`Start: ${startValue.error}`);
       return;
     }
-    const endValue = parseProgressInput(unit, endText);
+    const endValue = rowValue(endProgress, unit, format);
     if (!endValue.ok) {
       setValidation(`End: ${endValue.error}`);
       return;
@@ -345,15 +420,8 @@ function SessionForm({
             const next = book.formats.find((f) => f.id === event.target.value);
             if (!next) return;
             setFormatId(next.id);
-            const nextUnit = usingPercent ? 'percent' : naturalFor(next);
-            setUnit(nextUnit);
-            setStartText(
-              progressInputValue(
-                nextUnit,
-                percentToUnit(nextUnit, book.progressPercent, next) ?? 0,
-              ),
-            );
-            setEndText('');
+            setStartProgress(startRow(book, next));
+            setEndProgress(EMPTY_ROW);
           }}
         >
           {book.formats.map((f) => (
@@ -442,60 +510,62 @@ function SessionForm({
 
       <fieldset className="stack-sm">
         <legend>Progress</legend>
-        <div className="segmented" role="group" aria-label="Progress unit">
-          <button
-            type="button"
-            aria-pressed={!usingPercent}
-            onClick={() => {
-              changeUnit(naturalFor(format));
-            }}
-          >
-            {format.format === 'audiobook' ? 'Position' : 'Pages'}
-          </button>
-          <button
-            type="button"
-            aria-pressed={usingPercent}
-            onClick={() => {
-              changeUnit('percent');
-            }}
-          >
-            %
-          </button>
-        </div>
+        {/* Typing in either box of a row fills in the other from the format's length. */}
         <div className="grid-2">
-          <div className="field">
-            <label htmlFor="log-start-value">From ({unitHint(unit)})</label>
-            <input
-              id="log-start-value"
-              inputMode={unit === 'audio_seconds' ? 'text' : 'decimal'}
-              value={startText}
-              placeholder={unit === 'audio_seconds' ? '0:00:00' : '0'}
-              onChange={(event) => {
-                setStartText(event.target.value);
-              }}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="log-end-value">To ({unitHint(unit)})</label>
-            <input
-              id="log-end-value"
-              inputMode={unit === 'audio_seconds' ? 'text' : 'decimal'}
-              value={endText}
-              placeholder={unit === 'audio_seconds' ? '1:02:10' : ''}
-              onChange={(event) => {
-                setEndText(event.target.value);
-              }}
-            />
-          </div>
+          <ProgressBox
+            id="log-start-value"
+            label="From"
+            unit={natural}
+            value={startProgress.natural}
+            placeholder={natural === 'audio_seconds' ? '0:00:00' : '0'}
+            onChange={(text) => {
+              setStartProgress(rowFrom('natural', text, format));
+            }}
+          />
+          <ProgressBox
+            id="log-start-percent"
+            label="From"
+            unit="percent"
+            value={startProgress.percent}
+            placeholder="0"
+            onChange={(text) => {
+              setStartProgress(rowFrom('percent', text, format));
+            }}
+          />
+          <ProgressBox
+            id="log-end-value"
+            label="To"
+            unit={natural}
+            value={endProgress.natural}
+            placeholder={natural === 'audio_seconds' ? '1:02:10' : ''}
+            onChange={(text) => {
+              setEndProgress(rowFrom('natural', text, format));
+            }}
+          />
+          <ProgressBox
+            id="log-end-percent"
+            label="To"
+            unit="percent"
+            value={endProgress.percent}
+            placeholder=""
+            onChange={(text) => {
+              setEndProgress(rowFrom('percent', text, format));
+            }}
+          />
         </div>
-        {!usingPercent && !lengthKnown && (
+        {summary && (
+          <p className="field-hint" aria-live="polite">
+            {summary}
+          </p>
+        )}
+        {!lengthKnown && (
           <p className="field-hint">
-            The {FORMAT_LABELS[format.format].toLowerCase()} length isn’t known, so percent can’t be
-            worked out.{' '}
+            The {FORMAT_LABELS[format.format].toLowerCase()} length isn’t known, so{' '}
+            {format.format === 'audiobook' ? 'positions' : 'pages'} and % can’t be converted.{' '}
             <a href={href(paths.book(book.id))}>
               Add the {format.format === 'audiobook' ? 'duration' : 'page count'}
             </a>{' '}
-            or switch to %.
+            or enter From and To in the same unit.
           </p>
         )}
       </fieldset>
@@ -521,5 +591,38 @@ function SessionForm({
         {busy ? 'Saving…' : 'Save session'}
       </button>
     </form>
+  );
+}
+
+function ProgressBox({
+  id,
+  label,
+  unit,
+  value,
+  placeholder,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  unit: ProgressUnit;
+  value: string;
+  placeholder: string;
+  onChange: (text: string) => void;
+}) {
+  return (
+    <div className="field">
+      <label htmlFor={id}>
+        {label} ({unitHint(unit)})
+      </label>
+      <input
+        id={id}
+        inputMode={unit === 'audio_seconds' ? 'text' : 'decimal'}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => {
+          onChange(event.target.value);
+        }}
+      />
+    </div>
   );
 }
