@@ -10,25 +10,29 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 - `server/`: Hono + `@hono/node-server`, TypeScript run directly by Node type stripping (no build step, no tsx), SQLite via built-in `node:sqlite` (ADR 0003).
 - `shared/`: Zod schemas, inferred types and pure derivation/formatting functions — the API contract, imported by server and web.
 - `web/`: Vite + React + TypeScript PWA (SPEC §6): typed API client (`web/src/api/client.ts`), hash router, screens, Dexie outbox + read-model cache (`web/src/offline/`, ADR 0007), one plain stylesheet. No router or CSS framework.
-- `scripts/`: dependency-free tooling run by Node (icon generator).
+- `scripts/`: tooling run directly by Node with no extra packages (icon generator; launchd service `scripts/service.ts` with template `ops/com.bookshelf.server.plist`; shared helpers in `scripts/runtime.ts`). Script logic takes injected dependencies (`run`, `fetch`, port probe, output) and is unit-tested; the entry guard is `if (import.meta.main)`.
 - Tests: Vitest (projects `node` and `web`/jsdom), Testing Library, fake-indexeddb.
 
 ## Commands
 
-| Command                 | What it does                                                        |
-| ----------------------- | ------------------------------------------------------------------- |
-| `npm run dev`           | Server with `node --watch` + Vite dev server proxying `/api`        |
-| `npm run dev:server`    | Server only, restarting on changes in `server/` and `shared/`       |
-| `npm run build`         | Type-check everything, then build the web app into `web/dist`       |
-| `npm start`             | Production server on `127.0.0.1:$PORT`, serving `web/dist` if built |
-| `npm run lint`          | ESLint (strict type-checked)                                        |
-| `npm run format`        | Prettier write                                                      |
-| `npm run format:check`  | Prettier check                                                      |
-| `npm run typecheck`     | `tsc --noEmit` for server/shared and for web                        |
-| `npm test`              | Vitest once                                                         |
-| `npm run test:coverage` | Vitest with coverage; fails below 90% lines in any source folder    |
-| `npm run icons`         | Regenerate the PWA icons in `web/public/` (commit the output)       |
-| `npm run check`         | lint + format:check + typecheck + test:coverage — the quality gate  |
+| Command                     | What it does                                                                 |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `npm run dev`               | Server with `node --watch` + Vite dev server proxying `/api`                 |
+| `npm run dev:server`        | Server only, restarting on changes in `server/` and `shared/`                |
+| `npm run build`             | Type-check everything, then build the web app into `web/dist`                |
+| `npm start`                 | Production server on `127.0.0.1:$PORT`, serving `web/dist` if built          |
+| `npm run lint`              | ESLint (strict type-checked)                                                 |
+| `npm run format`            | Prettier write                                                               |
+| `npm run format:check`      | Prettier check                                                               |
+| `npm run typecheck`         | `tsc --noEmit` for server/shared and for web                                 |
+| `npm test`                  | Vitest once                                                                  |
+| `npm run test:coverage`     | Vitest with coverage; fails below 90% lines in any source folder             |
+| `npm run icons`             | Regenerate the PWA icons in `web/public/` (commit the output)                |
+| `npm run service:install`   | Build if needed, install + start the launchd agent (real Mac: user approval) |
+| `npm run service:uninstall` | `launchctl bootout` the agent and remove its plist                           |
+| `npm run service:status`    | Agent file, launchd state, `/api/health` (read-only)                         |
+| `npm run service:logs`      | Tail `BOOKSHELF_DATA_DIR/logs/` (`-- -f` to follow, `-- -n 200`)             |
+| `npm run check`             | lint + format:check + typecheck + test:coverage — the quality gate           |
 
 `npm run check` and `npm run build` must pass before any commit. Never disable, skip or weaken a lint rule, test or coverage threshold to get there.
 
@@ -52,6 +56,7 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 
 ## Data safety
 
+- **Never install, bootstrap or boot out the real launchd agent, or change Tailscale serve settings,** during development without the user's explicit approval. Verify the agent with `node scripts/service.ts plist --out <scratch file>` and `plutil -lint`.
 - **Never touch the user's real data directory** (`~/Library/Application Support/Bookshelf`) from tests, scripts or manual runs during development. Tests use `createTestEnv()` (`server/test/helpers.ts`), which creates an OS temp directory per test. Manual runs set `BOOKSHELF_DATA_DIR` to a temporary directory.
 - No external network in tests: outbound HTTP goes through the injected `fetch`, mocked with realistic fixtures (`server/test/fixtures/`). The fetch mock throws on any unexpected request.
 - Never commit `.env`, databases, covers, backups or real reading data. Test data is fictional or public bibliographic metadata.

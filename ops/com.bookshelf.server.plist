@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Bookshelf launchd agent (SPEC section 9). This is a template: `npm run service:install`
+  (scripts/service.ts) fills in the placeholders and writes the result to
+  ~/Library/LaunchAgents/com.bookshelf.server.plist. Re-run the install instead of editing
+  the installed copy.
+
+  RunAtLoad starts the server at login. KeepAlive with SuccessfulExit=false restarts it when
+  it crashes or exits with an error, but not after a clean shutdown; ThrottleInterval keeps a
+  failing server from restarting more than once every 30 seconds.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.bookshelf.server</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{NODE_PATH}}</string>
+		<string>{{SERVER_ENTRY}}</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>{{REPO_DIR}}</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+{{ENVIRONMENT}}
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>{{STDOUT_PATH}}</string>
+	<key>StandardErrorPath</key>
+	<string>{{STDERR_PATH}}</string>
+</dict>
+</plist>

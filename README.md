@@ -34,22 +34,48 @@ curl http://127.0.0.1:4380/api/health
 
 On first start the server creates the data directory, applies database migrations and writes a startup snapshot.
 
+## Running as a service (start at login)
+
+Bookshelf can run as a launchd agent so it starts when you log in and restarts itself if it crashes:
+
+```sh
+npm run service:install     # builds the web app if needed, installs and starts the agent
+npm run service:status      # installed? running? answering on 127.0.0.1:<PORT>?
+npm run service:logs        # last 50 log lines; `npm run service:logs -- -f` to follow
+npm run service:uninstall   # stop and remove the agent (your data and logs are kept)
+```
+
+`service:install` writes `~/Library/LaunchAgents/com.bookshelf.server.plist` (rendered from `ops/com.bookshelf.server.plist`) and loads it with `launchctl bootstrap`. The agent:
+
+- runs this checkout's `server/index.ts` with the Node you installed it with (an absolute path, so it does not depend on your shell or nvm), from the repo directory;
+- starts at login, restarts after a crash or error exit (at most once every 30 seconds), and stays stopped after a clean shutdown;
+- logs to `BOOKSHELF_DATA_DIR/logs/bookshelf.log` (JSON lines) and `bookshelf.err.log` (startup failures);
+- reads `.env` like `npm start` does, with `BOOKSHELF_TZ` fixed to the Mac's timezone at install time unless `.env` sets it — so your reading days don't shift if the Mac's clock changes zone while travelling.
+
+Install refuses, with an explanation, if the port is already taken — for example by a Bookshelf you started with `npm start` (stop it first) or by another program (change `PORT` in `.env`). Running it again replaces the installed agent; do that after changing `.env`, moving the repo, or switching Node installations. To restart the server after `git pull` + `npm run build`, run `npm run service:install` again (or `launchctl kickstart -k gui/$(id -u)/com.bookshelf.server`).
+
+To preview the agent without installing it: `node scripts/service.ts plist`.
+
 ## Commands
 
-| Command                 | What it does                                                                |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `npm run dev`           | Server (restarts on changes) plus the Vite dev server with an `/api` proxy  |
-| `npm run dev:server`    | Server only, watching `server/` and `shared/`                               |
-| `npm run build`         | Type-check everything and build the web app into `web/dist`                 |
-| `npm start`             | Production server on `127.0.0.1:$PORT`, serving `web/dist` when it is built |
-| `npm run lint`          | ESLint                                                                      |
-| `npm run format`        | Format with Prettier                                                        |
-| `npm run format:check`  | Check formatting                                                            |
-| `npm run typecheck`     | TypeScript checks for server, shared and web                                |
-| `npm test`              | Run the test suite once                                                     |
-| `npm run test:coverage` | Tests with coverage (fails below 90% lines in server, shared, scripts, web) |
-| `npm run check`         | Lint, format check, type-check and tests with coverage — the quality gate   |
-| `npm run icons`         | Regenerate the app icons in `web/public/` (commit the result)               |
+| Command                     | What it does                                                                |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `npm run dev`               | Server (restarts on changes) plus the Vite dev server with an `/api` proxy  |
+| `npm run dev:server`        | Server only, watching `server/` and `shared/`                               |
+| `npm run build`             | Type-check everything and build the web app into `web/dist`                 |
+| `npm start`                 | Production server on `127.0.0.1:$PORT`, serving `web/dist` when it is built |
+| `npm run lint`              | ESLint                                                                      |
+| `npm run format`            | Format with Prettier                                                        |
+| `npm run format:check`      | Check formatting                                                            |
+| `npm run typecheck`         | TypeScript checks for server, shared and web                                |
+| `npm test`                  | Run the test suite once                                                     |
+| `npm run test:coverage`     | Tests with coverage (fails below 90% lines in server, shared, scripts, web) |
+| `npm run check`             | Lint, format check, type-check and tests with coverage — the quality gate   |
+| `npm run icons`             | Regenerate the app icons in `web/public/` (commit the result)               |
+| `npm run service:install`   | Install and start the launchd agent (see above)                             |
+| `npm run service:uninstall` | Stop and remove the launchd agent                                           |
+| `npm run service:status`    | Show whether the agent is installed, running and answering                  |
+| `npm run service:logs`      | Show the server logs (`-- -f` to follow, `-- -n 200` for more lines)        |
 
 During development, point the server at a throwaway data directory so you never touch your real library, for example `BOOKSHELF_DATA_DIR=/tmp/bookshelf-dev npm run dev`.
 
@@ -118,7 +144,8 @@ Everything lives in `BOOKSHELF_DATA_DIR`:
 Bookshelf/
 ├── bookshelf.db      SQLite database (WAL mode, so also bookshelf.db-wal / -shm)
 ├── covers/           cached cover images, one per book (<book id>.jpg/png/webp)
-└── backups/          automatic and pre-import JSON snapshots
+├── backups/          automatic and pre-import JSON snapshots
+└── logs/             server logs when running as a service (bookshelf.log, bookshelf.err.log)
 ```
 
 ## Backups and restore
