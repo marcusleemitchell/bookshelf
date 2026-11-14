@@ -5,6 +5,7 @@ import {
   currentProgress,
   estimateFinish,
   formatLengthError,
+  mergeCandidates,
   percentToUnit,
   progressUnitError,
   readingSpeeds,
@@ -15,6 +16,7 @@ import {
   type FormatLength,
   type MeasuredSession,
 } from './derive.ts';
+import type { BookCandidate } from './schemas.ts';
 
 const paperback: FormatLength = { format: 'physical', pageCount: 400, audioDurationSeconds: null };
 const kindle: FormatLength = { format: 'kindle', pageCount: null, audioDurationSeconds: null };
@@ -458,5 +460,49 @@ describe('timerElapsedSeconds', () => {
         now,
       ),
     ).toBe(5);
+  });
+});
+
+describe('mergeCandidates', () => {
+  it('merges candidates without overwriting known fields', () => {
+    const base: BookCandidate = {
+      source: 'openlibrary',
+      sourceId: 'OL1M',
+      title: 'Base',
+      subtitle: null,
+      authors: [],
+      publisher: null,
+      publishedDate: null,
+      language: null,
+      synopsis: null,
+      coverUrl: null,
+      isbn10: null,
+      isbn13: null,
+      genres: [],
+      pageCount: 10,
+    };
+    const extra: BookCandidate = {
+      ...base,
+      source: 'googlebooks',
+      title: 'Extra',
+      subtitle: 'Sub',
+      authors: ['A'],
+      publisher: 'P',
+      publishedDate: '2000',
+      language: 'en',
+      synopsis: 'S',
+      coverUrl: 'https://example.org/c.jpg',
+      isbn10: '0306406152',
+      isbn13: '9780306406157',
+      genres: ['G'],
+      pageCount: 20,
+    };
+    expect(mergeCandidates(base, extra)).toEqual({
+      ...extra,
+      source: 'openlibrary',
+      sourceId: 'OL1M',
+      title: 'Base',
+      pageCount: 10,
+    });
   });
 });

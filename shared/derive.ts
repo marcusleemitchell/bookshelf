@@ -1,8 +1,8 @@
 /**
  * Pure derivations from SPEC §4: percent, current progress, pages read,
- * reading speed, estimated finish and streaks.
+ * reading speed, estimated finish and streaks; plus merging lookup candidates.
  */
-import type { FormatType, ProgressUnit } from './schemas.ts';
+import type { BookCandidate, FormatType, ProgressUnit } from './schemas.ts';
 import { addDays, diffDays, localDateKey, type DateKey } from './time.ts';
 
 /** The length fields of a book format that percent derivation needs. */
@@ -352,4 +352,22 @@ export function timerElapsedSeconds(timer: TimerTimes, now: Date): number {
   const running =
     timer.pausedAt === null ? Math.max(0, now.getTime() - Date.parse(timer.resumedAt)) : 0;
   return timer.accumulatedSeconds + Math.floor(running / 1000);
+}
+
+/** Fills gaps in `base` from `extra` (synopsis, cover, page count and other empty fields). */
+export function mergeCandidates(base: BookCandidate, extra: BookCandidate): BookCandidate {
+  return {
+    ...base,
+    subtitle: base.subtitle ?? extra.subtitle,
+    authors: base.authors.length > 0 ? base.authors : extra.authors,
+    publisher: base.publisher ?? extra.publisher,
+    publishedDate: base.publishedDate ?? extra.publishedDate,
+    language: base.language ?? extra.language,
+    synopsis: base.synopsis ?? extra.synopsis,
+    coverUrl: base.coverUrl ?? extra.coverUrl,
+    isbn10: base.isbn10 ?? extra.isbn10,
+    isbn13: base.isbn13 ?? extra.isbn13,
+    genres: base.genres.length > 0 ? base.genres : extra.genres,
+    pageCount: base.pageCount ?? extra.pageCount,
+  };
 }

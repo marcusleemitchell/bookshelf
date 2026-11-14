@@ -8,7 +8,6 @@ import {
   cleanDescription,
   cleanGenres,
   htmlToText,
-  mergeCandidates,
   normalisePublishedDate,
 } from '../services/lookup.ts';
 import {
@@ -396,47 +395,5 @@ describe('lookup helpers', () => {
     expect(
       htmlToText('<p>One&nbsp;&quot;two&quot;</p><p>It&#39;s &lt;3&gt;</p><br/><br/><br/>'),
     ).toBe('One "two"\n\nIt\'s <3>');
-  });
-
-  it('merges candidates without overwriting known fields', () => {
-    const base: BookCandidate = {
-      source: 'openlibrary',
-      sourceId: 'OL1M',
-      title: 'Base',
-      subtitle: null,
-      authors: [],
-      publisher: null,
-      publishedDate: null,
-      language: null,
-      synopsis: null,
-      coverUrl: null,
-      isbn10: null,
-      isbn13: null,
-      genres: [],
-      pageCount: 10,
-    };
-    const extra: BookCandidate = {
-      ...base,
-      source: 'googlebooks',
-      title: 'Extra',
-      subtitle: 'Sub',
-      authors: ['A'],
-      publisher: 'P',
-      publishedDate: '2000',
-      language: 'en',
-      synopsis: 'S',
-      coverUrl: 'https://example.org/c.jpg',
-      isbn10: '0306406152',
-      isbn13: '9780306406157',
-      genres: ['G'],
-      pageCount: 20,
-    };
-    expect(mergeCandidates(base, extra)).toEqual({
-      ...extra,
-      source: 'openlibrary',
-      sourceId: 'OL1M',
-      title: 'Base',
-      pageCount: 10,
-    });
   });
 });
