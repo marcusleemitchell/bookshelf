@@ -51,3 +51,32 @@ export function formatDate(value: string, timeZone: string): string {
   const [y, m, d] = key.split('-') as [string, string, string];
   return `${d}/${m}/${y}`;
 }
+
+/**
+ * Formats a book's publication date for display: lookups normalise it to
+ * `YYYY-MM-DD`, `YYYY-MM` or `YYYY`, shown as `DD/MM/YYYY`, `MM/YYYY` or
+ * `YYYY`; anything else (a manual entry such as "Spring 1999") as entered.
+ */
+export function formatPublishedDate(value: string): string {
+  const trimmed = value.trim();
+  const match = /^(\d{4})(?:-(0[1-9]|1[0-2])(?:-(0[1-9]|[12]\d|3[01]))?)?$/.exec(trimmed);
+  if (!match) return trimmed;
+  const [, year, month, day] = match;
+  if (day && month) return `${day}/${month}/${String(year)}`;
+  if (month) return `${month}/${String(year)}`;
+  return String(year);
+}
+
+const languageNames = new Intl.DisplayNames(['en-GB'], { type: 'language', fallback: 'code' });
+
+/**
+ * The English name of a language code from a lookup source: ISO 639-1 (`en`,
+ * Google Books) or 639-2 (`eng`, Open Library). Unknown codes are shown as is.
+ */
+export function languageName(code: string): string {
+  try {
+    return languageNames.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}

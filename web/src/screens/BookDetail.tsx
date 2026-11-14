@@ -12,7 +12,9 @@ import {
   formatAudioPosition,
   formatDate,
   formatDuration,
+  formatPublishedDate,
   formatTypeSchema,
+  languageName,
   noteListSchema,
   parseAudioPosition,
   sessionListSchema,
@@ -798,10 +800,10 @@ function ReadsSection({ book }: { book: BookDetail }) {
 function AboutSection({ book }: { book: BookDetail }) {
   const rows: [string, string | null][] = [
     ['Publisher', book.publisher],
-    ['Published', book.publishedDate],
+    ['Published', book.publishedDate && formatPublishedDate(book.publishedDate)],
     ['ISBN-13', book.isbn13],
     ['ISBN-10', book.isbn10],
-    ['Language', book.language],
+    ['Language', book.language && languageName(book.language)],
     ['Genres', book.genres.length > 0 ? book.genres.join(', ') : null],
     [
       'Source',

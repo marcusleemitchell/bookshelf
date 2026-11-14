@@ -123,6 +123,69 @@ describe('Add book', () => {
     expect(await screen.findByLabelText('Title')).toHaveValue('Last one');
   });
 
+  it('fetches the full record for a search result without a synopsis', async () => {
+    const searchResult = candidate({
+      sourceId: 'OL28804417W',
+      title: 'The Last Devil to Die',
+      authors: ['Richard Osman'],
+      synopsis: null,
+      language: 'eng',
+      publishedDate: '2023-09-14',
+      isbn13: '9780241512449',
+      isbn10: '0241512441',
+      genres: ['Mystery'],
+    });
+    const { user, server } = renderApp({
+      hash: '#/add',
+      routes: {
+        'GET /api/lookup/search': ok([searchResult]),
+        'GET /api/lookup/isbn/:isbn': ok(
+          candidate({
+            sourceId: 'OL39958267M',
+            title: 'The Last Devil to Die',
+            authors: ['Richard Osman'],
+            synopsis: 'Christmas is coming to Coopers Chase.',
+            publisher: null,
+            coverUrl: null,
+            isbn13: '9780241512449',
+            isbn10: '0241512441',
+            genres: [],
+          }),
+        ),
+      },
+    });
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.type(screen.getByLabelText('Title or author'), 'last devil');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    // Normalised dates are shown as DD/MM/YYYY in the results.
+    expect(await screen.findByText(/Richard Osman · 14\/09\/2023/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Choose The Last Devil to Die' }));
+
+    expect(await screen.findByLabelText('Synopsis')).toHaveValue(
+      'Christmas is coming to Coopers Chase.',
+    );
+    expect(server.callsTo('GET', '/api/lookup/isbn/9780241512449')).toHaveLength(1);
+    // Gaps in the full record are filled from the search result.
+    expect(screen.getByLabelText('Publisher')).toHaveValue('Bloomsbury');
+    expect(screen.getByLabelText('Genres')).toHaveValue('Mystery');
+  });
+
+  it('keeps the search result when fetching its full record fails', async () => {
+    const { user } = renderApp({
+      hash: '#/add',
+      routes: {
+        'GET /api/lookup/search': ok([candidate({ synopsis: null, title: 'Piranesi' })]),
+        'GET /api/lookup/isbn/:isbn': () => apiError(502, 'upstream_error', 'Open Library down'),
+      },
+    });
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.type(screen.getByLabelText('Title or author'), 'piranesi');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    await user.click(await screen.findByRole('button', { name: 'Choose Piranesi' }));
+    expect(await screen.findByLabelText('Title')).toHaveValue('Piranesi');
+    expect(screen.getByLabelText('Synopsis')).toHaveValue('');
+  });
+
   it('says when a search finds nothing', async () => {
     const { user } = renderApp({ hash: '#/add', routes: { 'GET /api/lookup/search': ok([]) } });
     await user.click(screen.getByRole('tab', { name: 'Search' }));

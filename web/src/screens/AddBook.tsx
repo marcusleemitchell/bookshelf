@@ -8,7 +8,9 @@ import { useState } from 'react';
 import {
   bookListSchema,
   bookStatusSchema,
+  formatPublishedDate,
   formatTypeSchema,
+  mergeCandidates,
   normaliseIsbn,
   parseAudioPosition,
   type BookCandidate,
@@ -157,6 +159,31 @@ function Lookup({
     });
   };
 
+  /**
+   * Search results describe a work and carry no synopsis, so picking one with
+   * an ISBN-13 fetches that edition's full record, keeping the search
+   * result's values for anything the record lacks (ADR 0008). If the lookup
+   * fails, the search result is used as it is.
+   */
+  const pickSearchResult = (picked: BookCandidate) => {
+    const isbn = picked.isbn13 ?? picked.isbn10 ?? '';
+    const isbn13 = picked.isbn13;
+    if (picked.synopsis !== null || isbn13 === null) {
+      onPick({ candidate: picked, isbn });
+      return;
+    }
+    setMessage(null);
+    run(async () => {
+      let detailed = picked;
+      try {
+        detailed = mergeCandidates(await services.api.lookupIsbn(isbn13), picked);
+      } catch {
+        // The search result alone is still a good starting point.
+      }
+      onPick({ candidate: detailed, isbn });
+    });
+  };
+
   const search = (q: string, page: number) => {
     setMessage(null);
     run(async () => {
@@ -283,8 +310,9 @@ function Lookup({
               <li key={`${candidate.source}:${candidate.sourceId}`}>
                 <CandidateRow
                   candidate={candidate}
+                  disabled={busy}
                   onPick={() => {
-                    onPick({ candidate, isbn: candidate.isbn13 ?? candidate.isbn10 ?? '' });
+                    pickSearchResult(candidate);
                   }}
                 />
               </li>
@@ -327,10 +355,18 @@ function CandidateCover({ candidate, size }: { candidate: BookCandidate; size: '
   );
 }
 
-function CandidateRow({ candidate, onPick }: { candidate: BookCandidate; onPick: () => void }) {
+function CandidateRow({
+  candidate,
+  disabled,
+  onPick,
+}: {
+  candidate: BookCandidate;
+  disabled: boolean;
+  onPick: () => void;
+}) {
   const details = [
     candidate.authors.join(', '),
-    candidate.publishedDate,
+    candidate.publishedDate && formatPublishedDate(candidate.publishedDate),
     candidate.pageCount ? `${candidate.pageCount} pages` : null,
   ].filter(Boolean);
   return (
@@ -345,6 +381,7 @@ function CandidateRow({ candidate, onPick }: { candidate: BookCandidate; onPick:
         type="button"
         className="btn btn-small"
         onClick={onPick}
+        disabled={disabled}
         aria-label={`Choose ${candidate.title}`}
       >
         Choose

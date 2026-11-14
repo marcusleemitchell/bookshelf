@@ -54,6 +54,18 @@ describe('Book detail', () => {
     expect(screen.getByText('Open Library')).toBeInTheDocument();
   });
 
+  it('shows the publication date as DD/MM/YYYY and the language by name', async () => {
+    renderApp({
+      hash,
+      routes: bookRoutes({
+        'GET /api/books/:id': ok(leGuin({ publishedDate: '2019-09-03', language: 'eng' })),
+      }),
+    });
+    const about = (await screen.findByRole('heading', { name: 'About' })).parentElement;
+    expect(about && within(about).getByText('03/09/2019')).toBeInTheDocument();
+    expect(about && within(about).getByText('English')).toBeInTheDocument();
+  });
+
   it('changes status and rating through the API', async () => {
     const { user, server } = renderApp({ hash, routes: bookRoutes() });
     await user.selectOptions(await screen.findByLabelText('Shelf'), 'finished');

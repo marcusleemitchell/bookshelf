@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { formatAudioPosition, formatDate, formatDuration, parseAudioPosition } from './format.ts';
+import {
+  formatAudioPosition,
+  formatDate,
+  formatDuration,
+  formatPublishedDate,
+  languageName,
+  parseAudioPosition,
+} from './format.ts';
 
 describe('formatDuration', () => {
   it.each([
@@ -56,5 +63,35 @@ describe('formatDate', () => {
     expect(formatDate('2026-11-14T23:30:00.000Z', 'Europe/London')).toBe('14/11/2026');
     expect(formatDate('2026-11-14T23:30:00.000Z', 'Asia/Tokyo')).toBe('15/11/2026');
     expect(formatDate('2026-11-14T03:30:00.000Z', 'America/Los_Angeles')).toBe('13/11/2026');
+  });
+});
+
+describe('formatPublishedDate', () => {
+  it('shows normalised publication dates as DD/MM/YYYY, MM/YYYY or YYYY', () => {
+    expect(formatPublishedDate('2015-04-30')).toBe('30/04/2015');
+    expect(formatPublishedDate('2015-04')).toBe('04/2015');
+    expect(formatPublishedDate('2003')).toBe('2003');
+  });
+
+  it('shows anything else as entered', () => {
+    expect(formatPublishedDate('Spring 1999')).toBe('Spring 1999');
+    expect(formatPublishedDate('2015-13-01')).toBe('2015-13-01');
+    expect(formatPublishedDate('  1990s ')).toBe('1990s');
+  });
+});
+
+describe('languageName', () => {
+  it('names ISO 639-1 and 639-2 codes in British English', () => {
+    expect(languageName('en')).toBe('English');
+    expect(languageName('eng')).toBe('English');
+    expect(languageName('fre')).toBe('French');
+    expect(languageName('ger')).toBe('German');
+    expect(languageName('es')).toBe('Spanish');
+  });
+
+  it('falls back to the code itself', () => {
+    expect(languageName('zz')).toBe('zz');
+    expect(languageName('not a code!')).toBe('not a code!');
+    expect(languageName('')).toBe('');
   });
 });
