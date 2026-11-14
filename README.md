@@ -182,6 +182,7 @@ Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). I
     http://127.0.0.1:4380/api/import/bookpine/preview
   ```
 
+- **From the terminal**: `npm run import:bookpine -- ~/Downloads/bookpine-export.csv --dry-run` previews, the same without `--dry-run` imports (into the `BOOKSHELF_DATA_DIR` from `.env`; `--json` prints the full report). It works while the server is running.
 - **Import**: `POST /api/import/bookpine` (same body) looks each book up for a cover, synopsis, genres and page count (about a second per book), saves a safety snapshot (`backups/bookshelf-pre-import-<timestamp>.json`) and imports everything in one go — if anything fails, nothing changes. Restore the snapshot (see [Backups and restore](#backups-and-restore)) to undo an import.
 - **Reading days have no time**: Bookpine records the days you read, not for how long, so imported sessions show as "Time unknown · imported". They appear in the calendar and count for your streak, but not for reading time, minutes, the daily goal, reading speed or finish estimates. Add a duration from the book's page (**Add time**) and the session counts fully.
 - **Re-importing is safe**: importing a newer export updates what changed in Bookpine and adds new readings, without duplicating anything. Changes you made in Bookshelf (a corrected title, a deleted session, an added duration, a removed tag) are kept. Books already in your library are linked rather than added twice.
@@ -282,6 +283,7 @@ Bookshelf/
 | `npm run tailscale:serve`   | Publish Bookshelf on your tailnet over HTTPS and print the address          |
 | `npm run tailscale:status`  | Show Tailscale's state and the Bookshelf address                            |
 | `npm run tailscale:off`     | Stop publishing Bookshelf on your tailnet                                   |
+| `npm run import:bookpine`   | Import a Bookpine CSV export (`-- export.csv`, add `--dry-run` to preview)  |
 
 During development, point the server at a throwaway data directory so you never touch your real library, for example `BOOKSHELF_DATA_DIR=/tmp/bookshelf-dev npm run dev`.
 

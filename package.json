@@ -50,6 +50,7 @@
     "tailscale:serve": "node scripts/tailscale.ts serve",
     "tailscale:status": "node scripts/tailscale.ts status",
     "tailscale:off": "node scripts/tailscale.ts off",
+    "import:bookpine": "node scripts/import-bookpine.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

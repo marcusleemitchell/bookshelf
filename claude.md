@@ -10,7 +10,7 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 - `server/`: Hono + `@hono/node-server`, TypeScript run directly by Node type stripping (no build step, no tsx), SQLite via built-in `node:sqlite` (ADR 0003).
 - `shared/`: Zod schemas, inferred types and pure derivation/formatting functions — the API contract, imported by server and web.
 - `web/`: Vite + React + TypeScript PWA (SPEC §6): typed API client (`web/src/api/client.ts`), hash router, screens, Dexie outbox + read-model cache (`web/src/offline/`, ADR 0007), one plain stylesheet. No router or CSS framework.
-- `scripts/`: tooling run directly by Node with no extra packages (icon generator; launchd service `scripts/service.ts` with template `ops/com.bookshelf.server.plist`; Tailscale serve `scripts/tailscale.ts`; shared helpers in `scripts/runtime.ts`). Script logic takes injected dependencies (`run`, `fetch`, port probe, output) and is unit-tested; the entry guard is `if (import.meta.main)`.
+- `scripts/`: tooling run directly by Node with no extra packages (icon generator; launchd service `scripts/service.ts` with template `ops/com.bookshelf.server.plist`; Tailscale serve `scripts/tailscale.ts`; Bookpine import CLI `scripts/import-bookpine.ts`; shared helpers in `scripts/runtime.ts`). Script logic takes injected dependencies (`run`, `fetch`, port probe, output) and is unit-tested; the entry guard is `if (import.meta.main)`.
 - Tests: Vitest (projects `node` and `web`/jsdom), Testing Library, fake-indexeddb.
 
 ## Commands
@@ -35,6 +35,7 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 | `npm run tailscale:serve`   | `tailscale serve --bg $PORT`, prints the HTTPS URL (real Mac: user approval) |
 | `npm run tailscale:status`  | Tailscale state, HTTPS/MagicDNS, Bookshelf URL (read-only)                   |
 | `npm run tailscale:off`     | Remove the HTTPS listener serving Bookshelf (real Mac: user approval)        |
+| `npm run import:bookpine`   | `-- <file> [--dry-run] [--json]`: Bookpine import into `BOOKSHELF_DATA_DIR`  |
 | `npm run check`             | lint + format:check + typecheck + test:coverage — the quality gate           |
 
 `npm run check` and `npm run build` must pass before any commit. Never disable, skip or weaken a lint rule, test or coverage threshold to get there.
@@ -63,7 +64,7 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 - **Never touch the user's real data directory** (`~/Library/Application Support/Bookshelf`) from tests, scripts or manual runs during development. Tests use `createTestEnv()` (`server/test/helpers.ts`), which creates an OS temp directory per test. Manual runs set `BOOKSHELF_DATA_DIR` to a temporary directory.
 - No external network in tests: outbound HTTP goes through the injected `fetch`, mocked with realistic fixtures (`server/test/fixtures/`). The fetch mock throws on any unexpected request.
 - Never commit `.env`, databases, covers, backups or real reading data. Test data is fictional or public bibliographic metadata.
-- Destructive operations on real data (imports, migrations against the live DB) need explicit approval and a backup first.
+- Destructive operations on real data (imports, migrations against the live DB) need explicit approval and a backup first. Never run `npm run import:bookpine` (or the import endpoints) against the real data directory during development: set `BOOKSHELF_DATA_DIR` to a temporary directory.
 
 ## Dependencies
 
