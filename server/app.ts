@@ -18,6 +18,17 @@ import { libraryRoutes } from './routes/library.ts';
 import { readingRoutes } from './routes/reading.ts';
 import { createNotionMirror, type NotionMirror } from './services/notion.ts';
 
+/**
+ * Unhashed files that decide which build the client runs (SPEC §9); served
+ * with `Cache-Control: no-cache`, as is every HTML response (SPA fallback).
+ */
+const REVALIDATED_FILES = new Set([
+  '/sw.js',
+  '/registerSW.js',
+  '/manifest.webmanifest',
+  '/index.html',
+]);
+
 /** Largest accepted JSON body for ordinary API requests. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -98,14 +109,20 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Hono {
       await next();
       if (c.req.path.startsWith('/api/') || !c.res.ok) return;
       if (c.req.path.startsWith('/assets/')) {
+        // Vite content-hashes everything under /assets/.
         c.header('Cache-Control', 'public, max-age=31536000, immutable');
-      } else if (c.res.headers.get('content-type')?.startsWith('text/html')) {
-        // The shell must revalidate so a new build is picked up.
+      } else if (
+        REVALIDATED_FILES.has(c.req.path) ||
+        c.res.headers.get('content-type')?.startsWith('text/html')
+      ) {
+        // The shell and the service worker must revalidate so a new build is picked up.
         c.header('Cache-Control', 'no-cache');
       }
     });
     app.get('*', serveStatic({ root: staticDir }));
-    app.get('*', serveStatic({ root: staticDir, path: 'index.html' }));
+    // SPA fallback for client routes. A missing hashed asset (an old build's
+    // chunk) must 404 rather than return index.html with immutable caching.
+    app.get('*', except('/assets/*', serveStatic({ root: staticDir, path: 'index.html' })));
   } else if (staticDir) {
     ctx.logger.warn('Web app not built; serving the API only', { staticDir });
   }

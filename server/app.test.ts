@@ -112,6 +112,37 @@ describe('static web app', () => {
     expect(api.headers.get('content-type')).toContain('application/json');
   });
 
+  it('makes the service worker, its registration, the manifest and index.html revalidate', async () => {
+    const dist = env.ctx.config.webDistDir;
+    mkdirSync(join(dist, 'assets'), { recursive: true });
+    writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Bookshelf</title>');
+    writeFileSync(join(dist, 'sw.js'), 'self.skipWaiting()');
+    writeFileSync(join(dist, 'registerSW.js'), 'navigator.serviceWorker.register("/sw.js")');
+    writeFileSync(join(dist, 'manifest.webmanifest'), '{"name":"Bookshelf"}');
+    writeFileSync(join(dist, 'icon-192.png'), 'png');
+    const app = createApp(env.ctx, { staticDir: dist });
+
+    for (const path of ['/sw.js', '/registerSW.js', '/manifest.webmanifest', '/index.html']) {
+      const response = await app.request(path);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get('cache-control'), path).toBe('no-cache');
+    }
+    const manifest = await app.request('/manifest.webmanifest');
+    expect(manifest.headers.get('content-type')).toContain('application/manifest+json');
+
+    // Other root files keep the default (heuristic) caching.
+    const icon = await app.request('/icon-192.png');
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get('cache-control')).toBeNull();
+
+    // A missing hashed asset (an old build's chunk) is a 404, never the SPA
+    // shell cached for a year under a script URL.
+    const missingAsset = await app.request('/assets/gone-123.js');
+    expect(missingAsset.status).toBe(404);
+    expect(missingAsset.headers.get('cache-control')).toBeNull();
+    expect(missingAsset.headers.get('content-type')).toContain('application/json');
+  });
+
   it('serves the API only when the web app is not built', async () => {
     const app = createApp(env.ctx, { staticDir: join(env.dir, 'missing') });
     expect((await app.request('/')).status).toBe(404);
