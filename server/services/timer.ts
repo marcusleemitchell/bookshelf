@@ -4,7 +4,12 @@
  * discarding it with `DELETE /api/timer`.
  */
 import { randomUUID } from 'node:crypto';
-import type { ActiveTimer, TimerPut, TimerResponse } from '../../shared/index.ts';
+import {
+  timerElapsedSeconds,
+  type ActiveTimer,
+  type TimerPut,
+  type TimerResponse,
+} from '../../shared/index.ts';
 import { nowIso, type AppContext } from '../context.ts';
 import { transaction } from '../db/database.ts';
 import { conflict, notFound, validationError } from '../http/errors.ts';
@@ -13,9 +18,7 @@ import { deleteTimer, findFormat, findTimer, saveTimer } from '../repositories/r
 
 /** Seconds elapsed on `timer` at `now` (never negative). */
 export function elapsedSeconds(timer: ActiveTimer, now: Date): number {
-  const running =
-    timer.pausedAt === null ? Math.max(0, now.getTime() - Date.parse(timer.resumedAt)) : 0;
-  return timer.accumulatedSeconds + Math.floor(running / 1000);
+  return timerElapsedSeconds(timer, now);
 }
 
 export function timerState(ctx: AppContext): TimerResponse {

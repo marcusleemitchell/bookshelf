@@ -334,3 +334,22 @@ export function computeStreaks(days: readonly DateKey[], today: DateKey): Streak
   const gap = diffDays(lastReadDate, today);
   return { current: gap <= 1 ? run : 0, longest, lastReadDate };
 }
+
+/** Timer fields needed to work out elapsed time (SPEC §4 ActiveTimer). */
+export interface TimerTimes {
+  resumedAt: string;
+  /** Null while running. */
+  pausedAt: string | null;
+  accumulatedSeconds: number;
+}
+
+/**
+ * Seconds elapsed on a timer at `now`: earlier segments plus, while running,
+ * the whole seconds since `resumedAt` (never negative). Derived from stored
+ * timestamps only, so it stays correct across app restarts.
+ */
+export function timerElapsedSeconds(timer: TimerTimes, now: Date): number {
+  const running =
+    timer.pausedAt === null ? Math.max(0, now.getTime() - Date.parse(timer.resumedAt)) : 0;
+  return timer.accumulatedSeconds + Math.floor(running / 1000);
+}

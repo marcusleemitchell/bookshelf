@@ -10,6 +10,7 @@ import {
   readingSpeeds,
   sessionAudioSeconds,
   sessionPages,
+  timerElapsedSeconds,
   sessionPercentDelta,
   type FormatLength,
   type MeasuredSession,
@@ -416,5 +417,46 @@ describe('computeStreaks', () => {
       longest: 2,
       lastReadDate: '2026-11-01',
     });
+  });
+});
+
+describe('timerElapsedSeconds', () => {
+  const now = new Date('2026-11-14T10:00:00.000Z');
+
+  it('adds the running segment to earlier segments', () => {
+    expect(
+      timerElapsedSeconds(
+        { resumedAt: '2026-11-14T09:30:00.000Z', pausedAt: null, accumulatedSeconds: 600 },
+        now,
+      ),
+    ).toBe(600 + 1800);
+  });
+
+  it('ignores the clock while paused', () => {
+    expect(
+      timerElapsedSeconds(
+        {
+          resumedAt: '2026-11-14T09:00:00.000Z',
+          pausedAt: '2026-11-14T09:10:00.000Z',
+          accumulatedSeconds: 600,
+        },
+        now,
+      ),
+    ).toBe(600);
+  });
+
+  it('floors partial seconds and never goes negative', () => {
+    expect(
+      timerElapsedSeconds(
+        { resumedAt: '2026-11-14T09:59:58.600Z', pausedAt: null, accumulatedSeconds: 0 },
+        now,
+      ),
+    ).toBe(1);
+    expect(
+      timerElapsedSeconds(
+        { resumedAt: '2026-11-14T10:05:00.000Z', pausedAt: null, accumulatedSeconds: 5 },
+        now,
+      ),
+    ).toBe(5);
   });
 });
