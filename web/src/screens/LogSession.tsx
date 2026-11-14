@@ -33,6 +33,11 @@ import {
   parseProgressInput,
   progressInputValue,
 } from '../lib/labels.ts';
+
+/** The unit shown in the From/To labels: `page`, `percent` or `h:mm:ss`. */
+function unitHint(unit: ProgressUnit): string {
+  return unit === 'audio_seconds' ? 'h:mm:ss' : UNIT_LABELS[unit].toLowerCase();
+}
 import { cacheKeys } from '../offline/cache.ts';
 import { href, navigate, paths } from '../router.ts';
 
@@ -381,7 +386,8 @@ function SessionForm({
             Duration
           </button>
         </div>
-        <div className="grid-2">
+        {/* Stacked: side by side, datetime inputs are too narrow on a phone to show the time. */}
+        <div className="stack">
           <div className="field">
             <label htmlFor="log-started">Started</label>
             <input
@@ -458,7 +464,7 @@ function SessionForm({
         </div>
         <div className="grid-2">
           <div className="field">
-            <label htmlFor="log-start-value">From ({UNIT_LABELS[unit].toLowerCase()})</label>
+            <label htmlFor="log-start-value">From ({unitHint(unit)})</label>
             <input
               id="log-start-value"
               inputMode={unit === 'audio_seconds' ? 'text' : 'decimal'}
@@ -470,7 +476,7 @@ function SessionForm({
             />
           </div>
           <div className="field">
-            <label htmlFor="log-end-value">To ({UNIT_LABELS[unit].toLowerCase()})</label>
+            <label htmlFor="log-end-value">To ({unitHint(unit)})</label>
             <input
               id="log-end-value"
               inputMode={unit === 'audio_seconds' ? 'text' : 'decimal'}

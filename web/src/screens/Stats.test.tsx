@@ -82,6 +82,9 @@ describe('Stats', () => {
     expect(
       screen.getByRole('figure', { name: 'Minutes read per month in 2026' }),
     ).toHaveTextContent('busiest month October 2026');
+    // The rating has its own line in the narrow tile so it is never cut off.
+    expect(screen.getByText('02/10/2026')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Rated 4½ stars' })).toHaveTextContent('★★★★½');
   });
 
   it('refetches when the range or year changes', async () => {

@@ -85,7 +85,7 @@ export function Library() {
             return (
               <>
                 {!searching && (
-                  <div className="segmented" role="tablist" aria-label="Shelves">
+                  <div className="segmented segmented-grid" role="tablist" aria-label="Shelves">
                     {STATUS_ORDER.map((status) => (
                       <button
                         key={status}

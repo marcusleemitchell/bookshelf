@@ -23,7 +23,14 @@ import { useResource, useServices } from '../app/hooks.ts';
 import { ChartFigure, DataTable, chartColours } from '../components/charts.tsx';
 import { Cover, ProgressBar, ResourceView, ScreenHeader } from '../components/ui.tsx';
 import { lastDays, monthLabel, shortMonth, todayKey } from '../lib/dates.ts';
-import { FORMAT_LABELS, GOAL_LABELS, formatPercent, plural, ratingStars } from '../lib/labels.ts';
+import {
+  FORMAT_LABELS,
+  GOAL_LABELS,
+  formatPercent,
+  plural,
+  ratingLabel,
+  ratingStars,
+} from '../lib/labels.ts';
 import { cacheKeys } from '../offline/cache.ts';
 import { href, paths } from '../router.ts';
 
@@ -571,10 +578,16 @@ function YearReview({ review }: { review: YearInReview }) {
                 <a className="book-tile" href={href(paths.book(book.bookId))}>
                   <Cover src={book.coverSrc} title={book.title} size="fill" />
                   <span className="title">{book.title}</span>
-                  <span className="author">
-                    {formatDate(book.finishedAt, timeZone)}
-                    {book.rating !== null && ` · ${ratingStars(book.rating)}`}
-                  </span>
+                  <span className="author">{formatDate(book.finishedAt, timeZone)}</span>
+                  {book.rating !== null && (
+                    <span
+                      className="author rating-stars"
+                      role="img"
+                      aria-label={`Rated ${ratingLabel(book.rating)}`}
+                    >
+                      {ratingStars(book.rating)}
+                    </span>
+                  )}
                 </a>
               </li>
             ))}

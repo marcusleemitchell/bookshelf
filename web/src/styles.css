@@ -257,6 +257,11 @@ p {
   padding: 0;
 }
 
+/* A list inside a card keeps the card's side padding; rows supply the vertical spacing. */
+.card.list {
+  padding: 0 14px;
+}
+
 .list > li + li {
   border-top: 1px solid var(--border);
 }
@@ -483,6 +488,19 @@ legend {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* A segmented control whose options wrap onto rows instead of scrolling out of view. */
+.segmented-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  border-radius: 22px;
+  overflow-x: visible;
+}
+
+.segmented-grid button {
+  white-space: normal;
+  text-align: center;
 }
 
 .segmented [aria-pressed='true'],
@@ -760,6 +778,12 @@ legend {
   color: var(--gold);
   letter-spacing: 2px;
   font-size: 1.1rem;
+}
+
+/* Compact stars on a line of their own inside narrow book tiles. */
+.book-tile .rating-stars {
+  font-size: 0.9rem;
+  letter-spacing: 1px;
 }
 
 /* ---------------------------------------------------------------- Progress */

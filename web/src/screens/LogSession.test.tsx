@@ -75,13 +75,13 @@ describe('Log session', () => {
       hash: `#/log?book=${IDS.hailMary}`,
       routes: routes({ 'GET /api/books/:id': ok(listening) }),
     });
-    expect(await screen.findByLabelText('From (position (h:mm:ss))')).toHaveValue('8:05:18');
-    await user.type(screen.getByLabelText('To (position (h:mm:ss))'), 'abc');
+    expect(await screen.findByLabelText('From (h:mm:ss)')).toHaveValue('8:05:18');
+    await user.type(screen.getByLabelText('To (h:mm:ss)'), 'abc');
     await user.click(screen.getByRole('button', { name: 'Save session' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('End: Use h:mm:ss');
 
-    await user.clear(screen.getByLabelText('To (position (h:mm:ss))'));
-    await user.type(screen.getByLabelText('To (position (h:mm:ss))'), '9:00:00');
+    await user.clear(screen.getByLabelText('To (h:mm:ss)'));
+    await user.type(screen.getByLabelText('To (h:mm:ss)'), '9:00:00');
     await user.click(screen.getByRole('button', { name: 'Duration' }));
     expect(screen.queryByLabelText('Ended')).not.toBeInTheDocument();
     await user.clear(screen.getByLabelText('Reading time (minutes)'));
