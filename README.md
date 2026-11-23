@@ -314,6 +314,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 - [ADR 0007](docs/adr/0007-offline-read-model-and-client-bookkeeping.md) — offline read model in IndexedDB and client-side read bookkeeping
 - [ADR 0008](docs/adr/0008-open-library-records-for-synopsis.md) — Open Library edition and work records supply synopsis and language
 - [ADR 0009](docs/adr/0009-bookpine-import.md) — Bookpine import: untimed sessions, merged editions and provenance
+- [ADR 0010](docs/adr/0010-family-profiles.md) — _proposed_: family profiles with a shared catalogue, personal shelves and light PIN sign-in
 
 ## Roadmap
 
