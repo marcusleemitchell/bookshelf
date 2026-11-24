@@ -102,12 +102,22 @@ describe('encodePng', () => {
   });
 });
 
+/**
+ * Rendering a 512 px icon is CPU-bound and several times slower under
+ * coverage with the whole suite running (over 5 s on a Mac mini).
+ */
+const RENDER_TIMEOUT_MS = 30_000;
+
 describe('committed icons', () => {
-  it.each(ICONS)('$file matches the generator output', (spec) => {
-    const committed = readFileSync(join(import.meta.dirname, '..', 'web', 'public', spec.file));
-    const header = readChunks(committed)[0]?.data ?? Buffer.alloc(0);
-    expect(header.readUInt32BE(0)).toBe(spec.size);
-    expect(header.readUInt32BE(4)).toBe(spec.size);
-    expect(committed.equals(renderIcon(spec))).toBe(true);
-  });
+  it.each(ICONS)(
+    '$file matches the generator output',
+    (spec) => {
+      const committed = readFileSync(join(import.meta.dirname, '..', 'web', 'public', spec.file));
+      const header = readChunks(committed)[0]?.data ?? Buffer.alloc(0);
+      expect(header.readUInt32BE(0)).toBe(spec.size);
+      expect(header.readUInt32BE(4)).toBe(spec.size);
+      expect(committed.equals(renderIcon(spec))).toBe(true);
+    },
+    RENDER_TIMEOUT_MS,
+  );
 });
