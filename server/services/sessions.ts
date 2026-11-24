@@ -21,7 +21,7 @@ import {
 import { nowIso, type AppContext } from '../context.ts';
 import { all, transaction, type SqlValue } from '../db/database.ts';
 import { conflict, notFound, validationError } from '../http/errors.ts';
-import { findBook, saveBook } from '../repositories/books.ts';
+import { findBook } from '../repositories/books.ts';
 import {
   findFormat,
   findRead,
@@ -38,7 +38,10 @@ import {
   readsTable,
   sessionsTable,
   upsertRow,
+  type Owned,
 } from '../repositories/tables.ts';
+import { updateShelfEntry } from './library.ts';
+import type { MemberScope } from './scope.ts';
 
 export type SessionCreateInput = z.output<typeof sessionCreateSchema>;
 
@@ -75,13 +78,19 @@ function defaultDuration(startedAt: string, endedAt: string): number {
 }
 
 /**
- * `POST /api/sessions`. Uses the given read, else the book's in-progress
- * read, else opens a new one. A `to_read` or `paused` book becomes `reading`.
+ * `POST /api/sessions`. Uses the given read, else the member's in-progress
+ * read of the book, else opens a new one. A `to_read` or `paused` book
+ * becomes `reading` on the member's shelf. The book must be on their shelf.
  */
-export function createSession(ctx: AppContext, input: SessionCreateInput): Session {
+export function createSession(
+  ctx: AppContext,
+  scope: MemberScope,
+  input: SessionCreateInput,
+): Session {
   const at = nowIso(ctx);
+  const memberId = scope.member.id;
   return transaction(ctx.db, () => {
-    const book = findBook(ctx.db, input.bookId);
+    const book = findBook(ctx.db, memberId, input.bookId);
     if (!book) throw validationError('Unknown bookId');
     const format = findFormat(ctx.db, input.formatId);
     if (!format) throw validationError('Unknown formatId');
@@ -90,15 +99,18 @@ export function createSession(ctx: AppContext, input: SessionCreateInput): Sessi
       throw conflict(`A record with id ${input.id} already exists`);
     }
 
-    let read = input.readId ? findRead(ctx.db, input.readId) : inProgressRead(ctx.db, book.id);
+    let read = input.readId
+      ? findRead(ctx.db, memberId, input.readId)
+      : inProgressRead(ctx.db, memberId, book.id);
     if (input.readId && read?.bookId !== book.id) {
       throw validationError('readId does not belong to this book');
     }
     if (!read) {
       read = {
         id: randomUUID(),
+        memberId,
         bookId: book.id,
-        number: nextReadNumber(ctx.db, book.id),
+        number: nextReadNumber(ctx.db, memberId, book.id),
         startedAt: input.startedAt,
         finishedAt: null,
         outcome: 'in_progress',
@@ -118,11 +130,12 @@ export function createSession(ctx: AppContext, input: SessionCreateInput): Sessi
         ? input.startValue
         : (percentToUnit(
             input.progressUnit,
-            currentProgress(readSessions(ctx.db, read.id)),
+            currentProgress(readSessions(ctx.db, memberId, read.id)),
             format,
           ) ?? 0);
-    const session: Session = {
+    const session: Owned<Session> = {
       id: input.id ?? randomUUID(),
+      memberId,
       readId: read.id,
       bookId: book.id,
       formatId: format.id,
@@ -145,28 +158,33 @@ export function createSession(ctx: AppContext, input: SessionCreateInput): Sessi
     insertRow(ctx.db, sessionsTable, session);
     // Logging reading puts a to-read or paused book (back) on the reading shelf.
     if (book.status === 'to_read' || book.status === 'paused') {
-      saveBook(ctx.db, { ...book, status: 'reading', updatedAt: at });
+      updateShelfEntry(ctx.db, memberId, book.id, { status: 'reading' }, at);
     }
     return session;
   });
 }
 
-function requireSession(ctx: AppContext, id: string): Session {
-  const session = findSession(ctx.db, id);
+function requireSession(ctx: AppContext, scope: MemberScope, id: string): Owned<Session> {
+  const session = findSession(ctx.db, scope.member.id, id);
   if (!session) throw notFound('Session');
   return session;
 }
 
 /** `PATCH /api/sessions/:id`: merges fields and re-derives percents. */
-export function updateSession(ctx: AppContext, id: string, patch: SessionUpdate): Session {
-  const existing = requireSession(ctx, id);
+export function updateSession(
+  ctx: AppContext,
+  scope: MemberScope,
+  id: string,
+  patch: SessionUpdate,
+): Session {
+  const existing = requireSession(ctx, scope, id);
   const at = nowIso(ctx);
   return transaction(ctx.db, () => {
     const format = findFormat(ctx.db, patch.formatId ?? existing.formatId);
     if (!format) throw validationError('Unknown formatId');
-    const merged: Session = { ...existing, ...patch, updatedAt: at };
+    const merged: Owned<Session> = { ...existing, ...patch, updatedAt: at };
     validateSessionShape(merged, format);
-    const session: Session = {
+    const session: Owned<Session> = {
       ...merged,
       ...derivePercents(format, merged.progressUnit, merged.startValue, merged.endValue),
     };
@@ -176,15 +194,19 @@ export function updateSession(ctx: AppContext, id: string, patch: SessionUpdate)
 }
 
 /** `DELETE /api/sessions/:id` (soft delete). */
-export function deleteSession(ctx: AppContext, id: string): void {
-  requireSession(ctx, id);
+export function deleteSession(ctx: AppContext, scope: MemberScope, id: string): void {
+  requireSession(ctx, scope, id);
   softDelete(ctx.db, 'sessions', id, nowIso(ctx));
 }
 
-/** `GET /api/sessions`: live sessions of live books, newest first. */
-export function listSessions(ctx: AppContext, query: SessionListQuery): Session[] {
-  const where = ['s.deleted_at IS NULL', 'b.deleted_at IS NULL'];
-  const params: SqlValue[] = [];
+/** `GET /api/sessions`: the member's live sessions of live books, newest first. */
+export function listSessions(
+  ctx: AppContext,
+  scope: MemberScope,
+  query: SessionListQuery,
+): Session[] {
+  const where = ['s.member_id = ?', 's.deleted_at IS NULL', 'b.deleted_at IS NULL'];
+  const params: SqlValue[] = [scope.member.id];
   if (query.bookId) {
     where.push('s.book_id = ?');
     params.push(query.bookId);

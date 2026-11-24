@@ -88,6 +88,44 @@ describe('import:bookpine CLI', () => {
     expect(out.at(-1)).toMatch(/^Safety snapshot: backups\/bookshelf-pre-import-/);
   });
 
+  it('imports into the member named by --member (name in any case, or id), else the owner', async () => {
+    const jo = env.addMember({ name: 'Jo' });
+    const shelf = (memberId: string) =>
+      all<{ n: number }>(
+        env.ctx.db,
+        'SELECT COUNT(*) AS n FROM shelf_entries WHERE member_id = ? AND deleted_at IS NULL',
+        [memberId],
+      )[0]?.n;
+    expect(await main(['export.csv', '--member', 'jo'], deps())).toBe(0);
+    expect(err).toContain('Importing into Jo’s shelf');
+    expect(shelf(jo.member.id)).toBe(16);
+    expect(shelf(env.owner.id)).toBe(0);
+    expect(await main(['export.csv', `--member=${jo.member.id}`, '--dry-run'], deps())).toBe(0);
+    expect(out).toContain(
+      'Books: 0 new, 0 updated, 16 unchanged, 0 skipped, 0 linked to existing books',
+    );
+    expect(await main(['export.csv'], deps())).toBe(0);
+    expect(err).toContain('Importing into Owner’s shelf');
+    expect(shelf(env.owner.id)).toBe(16);
+  });
+
+  it('refuses an unknown, ambiguous or missing --member', async () => {
+    env.addMember({ name: 'Sam' });
+    env.addMember({ name: 'sam', role: 'child' });
+    expect(await main(['export.csv', '--member', 'Robin'], deps())).toBe(1);
+    expect(err.at(-1)).toBe('No member is called "Robin". Members: Owner, Sam, sam');
+    expect(await main(['export.csv', '--member', 'SAM'], deps())).toBe(1);
+    expect(err.at(-1)).toMatch(/^More than one member is called "SAM"; give an id instead: /);
+    expect(await main(['export.csv', '--member'], deps())).toBe(2);
+    expect(err.at(-1)).toContain('Give a member name or id after --member.');
+    expect(count('shelf_entries')).toBe(0);
+    env.ctx.db.exec('UPDATE members SET is_admin = 0');
+    expect(await main(['export.csv'], deps())).toBe(1);
+    expect(err.at(-1)).toBe(
+      'No admin member found; give --member to choose whose shelf to import into.',
+    );
+  });
+
   it('explains usage, bad arguments, unreadable files and invalid exports', async () => {
     expect(await main(['--help'], deps())).toBe(0);
     expect(out).toEqual([USAGE]);

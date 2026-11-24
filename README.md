@@ -2,7 +2,7 @@
 
 A personal, self-hosted reading tracker. Log reading sessions (time and progress) across physical books, Kindle ebooks and audiobooks; build a library by ISBN or title search; see statistics, a reading calendar, streaks and goals; and keep everything backed up locally (with an optional one-way mirror to Notion).
 
-It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Family members sign in with a PIN; for now there is one profile, yours ([ADR 0010](docs/adr/0010-family-profiles.md) plans the rest).
+It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Family members sign in with a PIN. The family shares one catalogue of books, and each person has their own shelf (status and rating), reading history, notes, tags, goals and timer; adding family members in the app comes next ([ADR 0010](docs/adr/0010-family-profiles.md)).
 
 > Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. It also imports your Bookpine history (see [Importing from Bookpine](#importing-from-bookpine)). Importing from Notion is not planned: it would hold the same data, and Notion stays a one-way mirror.
 
@@ -154,7 +154,7 @@ The installed app picks up the new version by itself: the next launch (or the on
 ## Backups and restore
 
 - **Automatic snapshots**: the server writes `backups/bookshelf-YYYY-MM-DD.json` when it starts and every day at 03:00 (in `BOOKSHELF_TZ`), keeping the newest 14.
-- **Manual export**: `GET /api/backup/export` returns the full backup (all books, formats, reads, sessions, tags, notes, goals and the active timer, including deleted items):
+- **Manual export**: `GET /api/backup/export` returns the full backup of the whole family — the members (names and roles, never PINs), all books and formats, and each member's shelf, reads, sessions, tags, notes, goals and timer, including deleted items. Only parents and admins can export or restore:
 
   ```sh
   curl -o bookshelf-backup.json http://127.0.0.1:4380/api/backup/export
@@ -168,13 +168,13 @@ The installed app picks up the new version by itself: the next launch (or the on
     http://127.0.0.1:4380/api/backup/import
   ```
 
-  Any snapshot in `backups/` can be restored the same way. Cover images are not part of the JSON; they are downloaded again when first displayed.
+  A restore replaces everyone's books and reading. Members in the backup keep their current PINs (a member only in the backup comes back without a PIN), and members not in the backup are kept. A backup made before family profiles restores into the owner's profile. Any snapshot in `backups/` can be restored the same way. Cover images are not part of the JSON; they are downloaded again when first displayed.
 
 - For a belt-and-braces copy, include `BOOKSHELF_DATA_DIR` in Time Machine.
 
 ## Importing from Bookpine
 
-Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). In the app: **Settings → Import from Bookpine**, pick the CSV, check the preview (what would be added, updated and merged, plus any warnings), then **Import**. The same is available over HTTP. The full rules are in [SPEC §8.1](docs/SPEC.md#81-bookpine-csv-import-adr-0009); in short:
+Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export) into one person's shelf: yours in the app (parents and admins), or the member you name in the terminal. Books someone else in the family already has (same ISBN) are shared rather than added twice. In the app: **Settings → Import from Bookpine**, pick the CSV, check the preview (what would be added, updated and merged, plus any warnings), then **Import**. The same is available over HTTP. The full rules are in [SPEC §8.1](docs/SPEC.md#81-bookpine-csv-import-adr-0009); in short:
 
 - **Preview first**: `POST /api/import/bookpine/preview` shows what would happen — books new, updated and merged (duplicate editions such as a paperback and a "(Movie Tie-In)" edition become one book with several formats), reads, sessions, tags and warnings — without changing anything:
 
@@ -183,7 +183,7 @@ Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). I
     http://127.0.0.1:4380/api/import/bookpine/preview
   ```
 
-- **From the terminal**: `npm run import:bookpine -- ~/Downloads/bookpine-export.csv --dry-run` previews, the same without `--dry-run` imports (into the `BOOKSHELF_DATA_DIR` from `.env`; `--json` prints the full report). It works while the server is running.
+- **From the terminal**: `npm run import:bookpine -- ~/Downloads/bookpine-export.csv --dry-run` previews, the same without `--dry-run` imports (into the `BOOKSHELF_DATA_DIR` from `.env`; `--json` prints the full report). It imports into the owner's shelf unless `--member <name or id>` names someone else (e.g. `--member Jo`). It works while the server is running.
 - **Import**: `POST /api/import/bookpine` (same body) looks each book up for a cover, synopsis, genres and page count (about a second per book), saves a safety snapshot (`backups/bookshelf-pre-import-<timestamp>.json`) and imports everything in one go — if anything fails, nothing changes. Restore the snapshot (see [Backups and restore](#backups-and-restore)) to undo an import.
 - **Reading days have no time**: Bookpine records the days you read, not for how long, so imported sessions show as "Time unknown · imported". They appear in the calendar and count for your streak, but not for reading time, minutes, the daily goal, reading speed or finish estimates. Add a duration from the book's page (**Add time**) and the session counts fully.
 - **Re-importing is safe**: importing a newer export updates what changed in Bookpine and adds new readings, without duplicating anything. Changes you made in Bookshelf (a corrected title, a deleted session, an added duration, a removed tag) are kept. Books already in your library are linked rather than added twice.
@@ -191,7 +191,7 @@ Bookshelf can import a Bookpine CSV export (Bookpine → Settings → Export). I
 
 ## Notion setup (optional)
 
-Bookshelf can mirror your library, sessions and notes into Notion. The mirror is one-way: edits made in Notion are overwritten and never come back, and restores always use the JSON backups.
+Bookshelf can mirror the owner's library, sessions and notes into Notion (other family members' reading is not mirrored). The mirror is one-way: edits made in Notion are overwritten and never come back, and restores always use the JSON backups.
 
 1. Go to <https://www.notion.so/profile/integrations>, choose **New integration**, pick your workspace, set the type to **Internal**, and save. Copy the **Internal Integration Secret**.
 2. In Notion, create (or choose) a page to hold the Bookshelf databases. Open its **•••** menu → **Connections** → add your integration, so it can create content there.
@@ -264,28 +264,28 @@ Bookshelf/
 
 ## Commands
 
-| Command                     | What it does                                                                |
-| --------------------------- | --------------------------------------------------------------------------- |
-| `npm run dev`               | Server (restarts on changes) plus the Vite dev server with an `/api` proxy  |
-| `npm run dev:server`        | Server only, watching `server/` and `shared/`                               |
-| `npm run build`             | Type-check everything and build the web app into `web/dist`                 |
-| `npm start`                 | Production server on `127.0.0.1:$PORT`, serving `web/dist` when it is built |
-| `npm run lint`              | ESLint                                                                      |
-| `npm run format`            | Format with Prettier                                                        |
-| `npm run format:check`      | Check formatting                                                            |
-| `npm run typecheck`         | TypeScript checks for server, shared and web                                |
-| `npm test`                  | Run the test suite once                                                     |
-| `npm run test:coverage`     | Tests with coverage (fails below 90% lines in server, shared, scripts, web) |
-| `npm run check`             | Lint, format check, type-check and tests with coverage — the quality gate   |
-| `npm run icons`             | Regenerate the app icons in `web/public/` (commit the result)               |
-| `npm run service:install`   | Install and start the launchd agent (see above)                             |
-| `npm run service:uninstall` | Stop and remove the launchd agent                                           |
-| `npm run service:status`    | Show whether the agent is installed, running and answering                  |
-| `npm run service:logs`      | Show the server logs (`-- -f` to follow, `-- -n 200` for more lines)        |
-| `npm run tailscale:serve`   | Publish Bookshelf on your tailnet over HTTPS and print the address          |
-| `npm run tailscale:status`  | Show Tailscale's state and the Bookshelf address                            |
-| `npm run tailscale:off`     | Stop publishing Bookshelf on your tailnet                                   |
-| `npm run import:bookpine`   | Import a Bookpine CSV export (`-- export.csv`, add `--dry-run` to preview)  |
+| Command                     | What it does                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`               | Server (restarts on changes) plus the Vite dev server with an `/api` proxy                                             |
+| `npm run dev:server`        | Server only, watching `server/` and `shared/`                                                                          |
+| `npm run build`             | Type-check everything and build the web app into `web/dist`                                                            |
+| `npm start`                 | Production server on `127.0.0.1:$PORT`, serving `web/dist` when it is built                                            |
+| `npm run lint`              | ESLint                                                                                                                 |
+| `npm run format`            | Format with Prettier                                                                                                   |
+| `npm run format:check`      | Check formatting                                                                                                       |
+| `npm run typecheck`         | TypeScript checks for server, shared and web                                                                           |
+| `npm test`                  | Run the test suite once                                                                                                |
+| `npm run test:coverage`     | Tests with coverage (fails below 90% lines in server, shared, scripts, web)                                            |
+| `npm run check`             | Lint, format check, type-check and tests with coverage — the quality gate                                              |
+| `npm run icons`             | Regenerate the app icons in `web/public/` (commit the result)                                                          |
+| `npm run service:install`   | Install and start the launchd agent (see above)                                                                        |
+| `npm run service:uninstall` | Stop and remove the launchd agent                                                                                      |
+| `npm run service:status`    | Show whether the agent is installed, running and answering                                                             |
+| `npm run service:logs`      | Show the server logs (`-- -f` to follow, `-- -n 200` for more lines)                                                   |
+| `npm run tailscale:serve`   | Publish Bookshelf on your tailnet over HTTPS and print the address                                                     |
+| `npm run tailscale:status`  | Show Tailscale's state and the Bookshelf address                                                                       |
+| `npm run tailscale:off`     | Stop publishing Bookshelf on your tailnet                                                                              |
+| `npm run import:bookpine`   | Import a Bookpine CSV export (`-- export.csv`, add `--dry-run` to preview, `--member <name>` for someone else's shelf) |
 
 During development, point the server at a throwaway data directory so you never touch your real library, for example `BOOKSHELF_DATA_DIR=/tmp/bookshelf-dev npm run dev`.
 
@@ -316,7 +316,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 - [ADR 0007](docs/adr/0007-offline-read-model-and-client-bookkeeping.md) — offline read model in IndexedDB and client-side read bookkeeping
 - [ADR 0008](docs/adr/0008-open-library-records-for-synopsis.md) — Open Library edition and work records supply synopsis and language
 - [ADR 0009](docs/adr/0009-bookpine-import.md) — Bookpine import: untimed sessions, merged editions and provenance
-- [ADR 0010](docs/adr/0010-family-profiles.md) — family profiles with a shared catalogue, personal shelves and light PIN sign-in (step 1 of 4 built)
+- [ADR 0010](docs/adr/0010-family-profiles.md) — family profiles with a shared catalogue, personal shelves and light PIN sign-in (steps 1 and 2a of 4 built)
 
 ## Roadmap
 

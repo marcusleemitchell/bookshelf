@@ -78,8 +78,10 @@ describe('migrate', () => {
         '0003_untimed_sessions',
         '0004_import_links',
         '0005_members',
+        '0006_admin',
+        '0007_member_data',
       ],
-      version: 5,
+      version: 7,
     });
     expect(tables()).toEqual([
       'active_timer',
@@ -96,6 +98,7 @@ describe('migrate', () => {
       'schema_migrations',
       'sessions',
       'settings',
+      'shelf_entries',
       'sync_ops',
       'tags',
     ]);
@@ -105,6 +108,8 @@ describe('migrate', () => {
       { version: 3, name: 'untimed_sessions', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 4, name: 'import_links', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 5, name: 'members', applied_at: '2026-11-14T12:00:00.000Z' },
+      { version: 6, name: 'admin', applied_at: '2026-11-14T12:00:00.000Z' },
+      { version: 7, name: 'member_data', applied_at: '2026-11-14T12:00:00.000Z' },
     ]);
     expect(db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
@@ -115,9 +120,10 @@ describe('migrate', () => {
     seedVersion1();
     const before = db.prepare('SELECT * FROM books').all();
     const sessionsBefore = db.prepare('SELECT * FROM sessions').all();
-    expect(migrate(db).applied).toEqual(
-      expect.arrayContaining(['0002_paused_status', '0003_untimed_sessions']),
-    );
+    expect(migrate(db, shippedMigrationsUpTo(3)).applied).toEqual([
+      '0002_paused_status',
+      '0003_untimed_sessions',
+    ]);
     expect(db.prepare('SELECT * FROM books').all()).toEqual(before);
     // Sessions keep every value and are marked as logged in the app.
     expect(db.prepare('SELECT * FROM sessions').all()).toEqual(
@@ -153,7 +159,7 @@ describe('migrate', () => {
     migrate(db, shippedMigrationsUpTo(4));
     seedVersion1();
     const before = db.prepare('SELECT * FROM books').all();
-    expect(migrate(db).applied).toEqual(['0005_members']);
+    expect(migrate(db, shippedMigrationsUpTo(5)).applied).toEqual(['0005_members']);
     expect(db.prepare('SELECT * FROM books').all()).toEqual(before);
     const members = db
       .prepare('SELECT id, name, role, pin_hash, failed_pin_attempts, created_at FROM members')
@@ -180,6 +186,148 @@ describe('migrate', () => {
       db.exec(`INSERT INTO auth_sessions (token_hash, member_id, created_at, renewed_at, expires_at)
         VALUES ('h', 'missing', '${T}', '${T}', '${T}')`);
     }).toThrow(/FOREIGN KEY/);
+  });
+
+  it('makes the owner the admin and moves every row into their member data', () => {
+    migrate(db, shippedMigrationsUpTo(5));
+    const owner = db.prepare('SELECT id FROM members').get() as { id: string };
+    const B = (n: number) => `bbbbbbbb-0000-4000-8000-00000000000${n}`;
+    db.exec(`
+      INSERT INTO members (id, name, role, created_at, updated_at, deleted_at)
+        VALUES ('gone', 'Former', 'parent', '2020-01-01T00:00:00.000Z', '${T}', '${T}');
+      INSERT INTO members (id, name, role, created_at, updated_at)
+        VALUES ('robin', 'Robin', 'parent', '2099-01-01T00:00:00.000Z', '${T}');
+      INSERT INTO books (id, title, authors, genres, source, status, rating, isbn13, created_at, updated_at, deleted_at) VALUES
+        ('${B(1)}', 'Kindred', '["Octavia E. Butler"]', '["Fiction"]', 'manual', 'reading', 4.5, '9780807083697', '${T}', '${T}', NULL),
+        ('${B(2)}', 'Beloved', '[]', '[]', 'openlibrary', 'to_read', NULL, NULL, '${T}', '2026-11-02T10:00:00.000Z', NULL),
+        ('${B(3)}', 'Emma', '[]', '[]', 'manual', 'paused', NULL, NULL, '${T}', '${T}', NULL),
+        ('${B(4)}', 'Middlemarch', '[]', '[]', 'googlebooks', 'finished', 5, NULL, '${T}', '${T}', NULL),
+        ('${B(5)}', 'Ulysses', '[]', '[]', 'manual', 'dnf', 1.5, NULL, '${T}', '${T}', NULL),
+        ('${B(6)}', 'Deleted', '[]', '[]', 'manual', 'finished', 3, NULL, '${T}', '${T}', '2026-11-03T10:00:00.000Z');
+      INSERT INTO book_formats (id, book_id, format, page_count, created_at, updated_at)
+        VALUES ('f1', '${B(1)}', 'physical', 264, '${T}', '${T}');
+      INSERT INTO reads (id, book_id, number, started_at, finished_at, outcome, created_at, updated_at, deleted_at) VALUES
+        ('r1', '${B(1)}', 1, '${T}', NULL, 'in_progress', '${T}', '${T}', NULL),
+        ('r2', '${B(4)}', 1, '${T}', '${T}', 'finished', '${T}', '${T}', NULL),
+        ('r3', '${B(6)}', 1, '${T}', '${T}', 'finished', '${T}', '${T}', '${T}');
+      INSERT INTO sessions (id, read_id, book_id, format_id, started_at, ended_at, duration_seconds,
+          progress_unit, start_value, end_value, start_percent, end_percent, note, source, created_at, updated_at, deleted_at) VALUES
+        ('s1', 'r1', '${B(1)}', 'f1', '${T}', '${T}', 1800, 'pages', 0, 26, 0, 9.85, 'Good', 'app', '${T}', '${T}', NULL),
+        ('s2', 'r1', '${B(1)}', 'f1', '${T}', '${T}', NULL, 'pages', 26, 40, 9.85, 15.15, NULL, 'bookpine', '${T}', '${T}', '${T}');
+      INSERT INTO tags (id, name, name_key, colour, created_at, updated_at, deleted_at) VALUES
+        ('t1', 'Classics', 'classics', '#112233', '${T}', '${T}', NULL),
+        ('t2', 'Old', 'old', NULL, '${T}', '${T}', '${T}');
+      INSERT INTO book_tags (book_id, tag_id, created_at) VALUES ('${B(1)}', 't1', '${T}'), ('${B(4)}', 't1', '${T}');
+      INSERT INTO book_notes (id, book_id, kind, text, location, created_at, updated_at, deleted_at) VALUES
+        ('n1', '${B(1)}', 'quote', 'Quoted line', 'p. 12', '${T}', '${T}', NULL),
+        ('n2', '${B(1)}', 'note', 'Removed', NULL, '${T}', '${T}', '${T}');
+      INSERT INTO goals (id, kind, year, target, created_at, updated_at, deleted_at) VALUES
+        ('g1', 'books_per_year', 2026, 24, '${T}', '${T}', NULL),
+        ('g2', 'minutes_per_day', NULL, 30, '${T}', '${T}', NULL);
+      INSERT INTO active_timer (id, book_id, format_id, started_at, resumed_at, paused_at, accumulated_seconds, created_at, updated_at)
+        VALUES ('timer', '${B(1)}', 'f1', '${T}', '${T}', '${T}', 60, '${T}', '${T}');
+      INSERT INTO import_links (source, entity, external_id, local_id, imported, imported_at)
+        VALUES ('bookpine', 'book', 'kindred', '${B(1)}', '{"title":"Kindred"}', '${T}');
+    `);
+    const rows = (table: string) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+    const before = Object.fromEntries(
+      [
+        'books',
+        'reads',
+        'sessions',
+        'book_notes',
+        'tags',
+        'goals',
+        'active_timer',
+        'import_links',
+        'book_tags',
+        'book_formats',
+      ].map((table) => [table, rows(table)]),
+    );
+
+    expect(migrate(db).applied).toEqual(['0006_admin', '0007_member_data']);
+
+    expect(db.prepare('SELECT id, is_admin FROM members ORDER BY created_at').all()).toEqual([
+      { id: 'gone', is_admin: 0 },
+      { id: owner.id, is_admin: 1 },
+      { id: 'robin', is_admin: 0 },
+    ]);
+    const mine = (row: Record<string, unknown>) => ({ ...row, member_id: owner.id });
+    expect(db.prepare('SELECT * FROM shelf_entries ORDER BY rowid').all()).toEqual(
+      before['books']?.map((book) => ({
+        member_id: owner.id,
+        book_id: book['id'],
+        status: book['status'],
+        rating: book['rating'],
+        created_at: book['created_at'],
+        updated_at: book['updated_at'],
+        deleted_at: book['deleted_at'],
+      })),
+    );
+    expect(rows('books')).toEqual(
+      before['books']?.map(({ status: _status, rating: _rating, ...book }) => book),
+    );
+    for (const table of ['reads', 'sessions', 'tags', 'goals', 'import_links']) {
+      expect(rows(table)).toEqual(before[table]?.map(mine));
+    }
+    expect(rows('book_notes')).toEqual(
+      before['book_notes']?.map((n) => ({ ...mine(n), shared: 0 })),
+    );
+    expect(rows('active_timer')).toEqual(
+      before['active_timer']?.map(({ singleton: _singleton, ...timer }) => mine(timer)),
+    );
+    expect(rows('book_tags')).toEqual(before['book_tags']);
+    expect(rows('book_formats')).toEqual(before['book_formats']);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'books'")
+        .all()
+        .map((row) => row['name'])
+        .sort(),
+    ).toEqual(['books_isbn13_idx', 'sqlite_autoindex_books_1']);
+
+    // Uniqueness is per member now.
+    const tag = (id: string, member: string) =>
+      `INSERT INTO tags (id, member_id, name, name_key, created_at, updated_at) VALUES ('${id}', '${member}', 'Classics', 'classics', '${T}', '${T}')`;
+    expect(() => {
+      db.exec(tag('t3', owner.id));
+    }).toThrow(/UNIQUE/);
+    db.exec(tag('t3', 'robin'));
+    const goal = (id: string, member: string) =>
+      `INSERT INTO goals (id, member_id, kind, year, target, created_at, updated_at) VALUES ('${id}', '${member}', 'minutes_per_day', NULL, 10, '${T}', '${T}')`;
+    expect(() => {
+      db.exec(goal('g3', owner.id));
+    }).toThrow(/UNIQUE/);
+    db.exec(goal('g3', 'robin'));
+    const timer = (id: string, member: string) =>
+      `INSERT INTO active_timer (id, member_id, book_id, format_id, started_at, resumed_at, created_at, updated_at) VALUES ('${id}', '${member}', '${B(1)}', 'f1', '${T}', '${T}', '${T}', '${T}')`;
+    expect(() => {
+      db.exec(timer('timer2', owner.id));
+    }).toThrow(/UNIQUE/);
+    db.exec(timer('timer2', 'robin'));
+    const link = (member: string) =>
+      `INSERT INTO import_links (member_id, source, entity, external_id, local_id, imported_at) VALUES ('${member}', 'bookpine', 'book', 'kindred', '${B(1)}', '${T}')`;
+    expect(() => {
+      db.exec(link(owner.id));
+    }).toThrow(/UNIQUE/);
+    db.exec(link('robin'));
+    const entry = (member: string, rating: number) =>
+      `INSERT INTO shelf_entries (member_id, book_id, status, rating, created_at, updated_at) VALUES ('${member}', '${B(1)}', 'to_read', ${rating}, '${T}', '${T}')`;
+    expect(() => {
+      db.exec(entry(owner.id, 4));
+    }).toThrow(/UNIQUE/);
+    expect(() => {
+      db.exec(entry('robin', 4.3));
+    }).toThrow(/CHECK/);
+    db.exec(entry('robin', 4));
+    expect(() => {
+      db.exec(entry('nobody', 4));
+    }).toThrow(/FOREIGN KEY/);
+    expect(() => {
+      db.exec(`UPDATE book_notes SET shared = 2 WHERE id = 'n1'`);
+    }).toThrow(/CHECK/);
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
   it('is idempotent and applies only new migrations', () => {

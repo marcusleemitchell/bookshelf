@@ -1,11 +1,13 @@
 /**
  * Bookpine CSV import from the command line (SPEC §8.1, §9):
  *
- *   npm run import:bookpine -- <file.csv> [--dry-run] [--json]
+ *   npm run import:bookpine -- <file.csv> [--member <name or id>] [--dry-run] [--json]
  *
  * Runs the same preview/import as `POST /api/import/bookpine[/preview]`
  * against the database in the configured `BOOKSHELF_DATA_DIR` (`.env`, then
- * the environment, exactly as the server resolves it). `--dry-run` writes
+ * the environment, exactly as the server resolves it), into one family
+ * member's shelf (ADR 0010): `--member` names them by name (any case) or id,
+ * and defaults to the owner. `--dry-run` writes
  * nothing; a real import looks books up online, writes a pre-import snapshot
  * to `backups/` and applies everything in one transaction. It is safe to run
  * while the server is running (SQLite serialises the writes).
@@ -21,7 +23,9 @@ import { openDatabase } from '../server/db/database.ts';
 import { migrate } from '../server/db/migrate.ts';
 import { AppError } from '../server/http/errors.ts';
 import { createLogger } from '../server/logger.ts';
+import { findOwner, listMembers, type MemberRow } from '../server/repositories/members.ts';
 import { importBookpine, previewBookpine } from '../server/services/bookpine.ts';
+import { selfScope } from '../server/services/scope.ts';
 import {
   consoleOutput,
   readDotEnv,
@@ -31,8 +35,9 @@ import {
   type Output,
 } from './runtime.ts';
 
-export const USAGE = `Usage: npm run import:bookpine -- <bookpine-export.csv> [--dry-run] [--json]
+export const USAGE = `Usage: npm run import:bookpine -- <bookpine-export.csv> [--member <name or id>] [--dry-run] [--json]
 
+  --member   The family member whose shelf to import into (name or id; default: the owner)
   --dry-run  Show what the import would do without changing anything
   --json     Print the full report as JSON instead of a summary
 
@@ -52,6 +57,8 @@ export interface ImportDeps extends Output {
 
 interface Options {
   file: string;
+  /** Name or id of the member to import into; null for the owner. */
+  member: string | null;
   dryRun: boolean;
   json: boolean;
 }
@@ -61,19 +68,56 @@ type Parsed =
 
 function parseArgs(argv: readonly string[]): Parsed {
   let file: string | null = null;
+  let member: string | null = null;
   let dryRun = false;
   let json = false;
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i] as string;
     if (arg === '--help' || arg === '-h') return { kind: 'help' };
     if (arg === '--dry-run') dryRun = true;
     else if (arg === '--json') json = true;
-    else if (arg.startsWith('-')) return { kind: 'error', message: `Unknown option "${arg}".` };
+    else if (arg === '--member' || arg.startsWith('--member=')) {
+      const value = arg === '--member' ? argv[(i += 1)] : arg.slice('--member='.length);
+      if (!value?.trim()) {
+        return { kind: 'error', message: 'Give a member name or id after --member.' };
+      }
+      member = value.trim();
+    } else if (arg.startsWith('-')) return { kind: 'error', message: `Unknown option "${arg}".` };
     else if (file === null) file = arg;
     else return { kind: 'error', message: 'Give exactly one CSV file.' };
   }
   return file === null
     ? { kind: 'error', message: 'Give the Bookpine CSV export to import.' }
-    : { kind: 'run', options: { file, dryRun, json } };
+    : { kind: 'run', options: { file, member, dryRun, json } };
+}
+
+/**
+ * The live member named by `wanted` (an id, or a name in any case), or the
+ * owner when null. Throws a ScriptError when no single member matches.
+ */
+export function resolveMember(ctx: AppContext, wanted: string | null): MemberRow {
+  if (wanted === null) {
+    const owner = findOwner(ctx.db);
+    if (!owner)
+      throw new ScriptError(
+        'No admin member found; give --member to choose whose shelf to import into.',
+      );
+    return owner;
+  }
+  const members = listMembers(ctx.db);
+  const byId = members.find((member) => member.id === wanted);
+  if (byId) return byId;
+  const key = wanted.toLocaleLowerCase('en-GB');
+  const named = members.filter((member) => member.name.toLocaleLowerCase('en-GB') === key);
+  if (named.length === 1) return named[0] as MemberRow;
+  if (named.length > 1) {
+    throw new ScriptError(
+      `More than one member is called "${wanted}"; give an id instead: ${named.map((m) => m.id).join(', ')}`,
+    );
+  }
+  throw new ScriptError(
+    `No member is called "${wanted}". Members: ${members.map((m) => m.name).join(', ')}`,
+  );
 }
 
 function counts(
@@ -130,9 +174,12 @@ export async function main(argv: readonly string[], deps: ImportDeps): Promise<n
     opened = deps.open();
     const { ctx } = opened;
     deps.err(`Data directory: ${ctx.config.dataDir}`);
+    const member = resolveMember(ctx, options.member);
+    deps.err(`Importing into ${member.name}’s shelf`);
+    const scope = selfScope(member);
     const report = options.dryRun
-      ? await previewBookpine(ctx, csv)
-      : await importBookpine(ctx, csv, {
+      ? await previewBookpine(ctx, scope, csv)
+      : await importBookpine(ctx, scope, csv, {
           onLookup: (done, total) => {
             deps.err(`Looking up book ${done + 1} of ${total}…`);
           },

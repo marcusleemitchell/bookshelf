@@ -84,7 +84,13 @@ export function hashToken(token: string): string {
 }
 
 export function toProfile(member: MemberRow): MemberProfile {
-  return { id: member.id, name: member.name, role: member.role, hasPin: member.pinHash !== null };
+  return {
+    id: member.id,
+    name: member.name,
+    role: member.role,
+    isAdmin: member.isAdmin,
+    hasPin: member.pinHash !== null,
+  };
 }
 
 export function authState(ctx: AppContext, me: MemberRow | null): AuthState {

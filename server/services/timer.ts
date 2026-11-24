@@ -1,5 +1,5 @@
 /**
- * The single active reading timer (SPEC §4). It survives app closure; the
+ * Each member's active reading timer, at most one (SPEC §4). It survives app closure; the
  * client stops it by logging a session prefilled from it and then
  * discarding it with `DELETE /api/timer`.
  */
@@ -15,14 +15,16 @@ import { transaction } from '../db/database.ts';
 import { conflict, notFound, validationError } from '../http/errors.ts';
 import { findBook } from '../repositories/books.ts';
 import { deleteTimer, findFormat, findTimer, saveTimer } from '../repositories/records.ts';
+import { assertNewId } from './library.ts';
+import type { MemberScope } from './scope.ts';
 
 /** Seconds elapsed on `timer` at `now` (never negative). */
 export function elapsedSeconds(timer: ActiveTimer, now: Date): number {
   return timerElapsedSeconds(timer, now);
 }
 
-export function timerState(ctx: AppContext): TimerResponse {
-  const timer = findTimer(ctx.db) ?? null;
+export function timerState(ctx: AppContext, scope: MemberScope): TimerResponse {
+  const timer = findTimer(ctx.db, scope.member.id) ?? null;
   const now = ctx.now();
   return {
     timer,
@@ -32,20 +34,23 @@ export function timerState(ctx: AppContext): TimerResponse {
 }
 
 /** `PUT /api/timer`: start, pause or resume. */
-export function updateTimer(ctx: AppContext, body: TimerPut): TimerResponse {
+export function updateTimer(ctx: AppContext, scope: MemberScope, body: TimerPut): TimerResponse {
   const updatedAt = nowIso(ctx);
   const at = body.at ?? updatedAt;
+  const memberId = scope.member.id;
   transaction(ctx.db, () => {
-    const existing = findTimer(ctx.db);
+    const existing = findTimer(ctx.db, memberId);
     if (body.action === 'start') {
       if (existing) throw conflict('A timer is already active; stop or discard it first');
-      const book = findBook(ctx.db, body.bookId);
+      if (body.id) assertNewId(ctx, 'active_timer', body.id);
+      const book = findBook(ctx.db, memberId, body.bookId);
       if (!book) throw validationError('Unknown bookId');
       const format = findFormat(ctx.db, body.formatId);
       if (format?.bookId !== book.id)
         throw validationError('formatId does not belong to this book');
       saveTimer(ctx.db, {
         id: body.id ?? randomUUID(),
+        memberId,
         bookId: book.id,
         formatId: format.id,
         startedAt: at,
@@ -74,11 +79,11 @@ export function updateTimer(ctx: AppContext, body: TimerPut): TimerResponse {
     }
     saveTimer(ctx.db, { ...existing, pausedAt: null, resumedAt: at, updatedAt });
   });
-  return timerState(ctx);
+  return timerState(ctx, scope);
 }
 
-/** `DELETE /api/timer`: discards the timer. */
-export function discardTimer(ctx: AppContext): void {
-  if (!findTimer(ctx.db)) throw notFound('Timer');
-  deleteTimer(ctx.db);
+/** `DELETE /api/timer`: discards the member's timer. */
+export function discardTimer(ctx: AppContext, scope: MemberScope): void {
+  if (!findTimer(ctx.db, scope.member.id)) throw notFound('Timer');
+  deleteTimer(ctx.db, scope.member.id);
 }

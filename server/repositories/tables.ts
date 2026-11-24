@@ -1,13 +1,13 @@
 /**
  * Table definitions and generic row mapping. Entities are camelCase objects
  * (the shared schemas); columns are the snake_case equivalents. JSON array
- * fields are stored as TEXT.
+ * fields are stored as TEXT. Personal tables carry `member_id` ({@link Owned}).
  */
 import type {
   ActiveTimer,
   BookFormat,
   BookNote,
-  BookRecord,
+  CatalogueBook,
   Goal,
   Read,
   Session,
@@ -45,7 +45,15 @@ export function tagNameKey(name: string): string {
 
 const syncTimestamps = ['createdAt', 'updatedAt', 'deletedAt'] as const;
 
-export const booksTable = defineTable<BookRecord>(
+/**
+ * A personal row as stored: the entity plus the member it belongs to
+ * (ADR 0010). API responses drop `memberId` (response schemas strip it);
+ * backups keep it.
+ */
+export type Owned<T> = T & { memberId: string };
+
+/** The shared catalogue (no status or rating: those live in `shelf_entries`). */
+export const booksTable = defineTable<CatalogueBook>(
   'books',
   [
     'id',
@@ -63,8 +71,6 @@ export const booksTable = defineTable<BookRecord>(
     'genres',
     'source',
     'sourceId',
-    'status',
-    'rating',
     ...syncTimestamps,
   ],
   { json: ['authors', 'genres'] },
@@ -80,8 +86,9 @@ export const formatsTable = defineTable<BookFormat>('book_formats', [
   ...syncTimestamps,
 ]);
 
-export const readsTable = defineTable<Read>('reads', [
+export const readsTable = defineTable<Owned<Read>>('reads', [
   'id',
+  'memberId',
   'bookId',
   'number',
   'startedAt',
@@ -90,8 +97,9 @@ export const readsTable = defineTable<Read>('reads', [
   ...syncTimestamps,
 ]);
 
-export const sessionsTable = defineTable<Session>('sessions', [
+export const sessionsTable = defineTable<Owned<Session>>('sessions', [
   'id',
+  'memberId',
   'readId',
   'bookId',
   'formatId',
@@ -108,8 +116,9 @@ export const sessionsTable = defineTable<Session>('sessions', [
   ...syncTimestamps,
 ]);
 
-export const timerTable = defineTable<ActiveTimer>('active_timer', [
+export const timerTable = defineTable<Owned<ActiveTimer>>('active_timer', [
   'id',
+  'memberId',
   'bookId',
   'formatId',
   'startedAt',
@@ -120,12 +129,20 @@ export const timerTable = defineTable<ActiveTimer>('active_timer', [
   'updatedAt',
 ]);
 
-export const tagsTable = defineTable<Tag>('tags', ['id', 'name', 'colour', ...syncTimestamps], {
-  computed: { name_key: (tag) => tagNameKey(tag.name) },
-});
+export const tagsTable = defineTable<Owned<Tag>>(
+  'tags',
+  ['id', 'memberId', 'name', 'colour', ...syncTimestamps],
+  { computed: { name_key: (tag) => tagNameKey(tag.name) } },
+);
 
-export const notesTable = defineTable<BookNote>('book_notes', [
+/**
+ * Notes and quotes. The `shared` column (ADR 0010) is not mapped here: new
+ * rows get its default (private) and upserts keep it; backups read and write
+ * it directly.
+ */
+export const notesTable = defineTable<Owned<BookNote>>('book_notes', [
   'id',
+  'memberId',
   'bookId',
   'kind',
   'text',
@@ -133,8 +150,9 @@ export const notesTable = defineTable<BookNote>('book_notes', [
   ...syncTimestamps,
 ]);
 
-export const goalsTable = defineTable<Goal>('goals', [
+export const goalsTable = defineTable<Owned<Goal>>('goals', [
   'id',
+  'memberId',
   'kind',
   'year',
   'target',
@@ -189,9 +207,23 @@ export function upsertRow<T>(db: Db, table: Table<T>, entity: T): void {
   );
 }
 
-/** The row with `id`, including soft-deleted rows. */
+/** The row with `id`, including soft-deleted rows, whoever it belongs to. */
 export function findById<T>(db: Db, table: Table<T>, id: string): T | undefined {
   const row = all(db, `SELECT * FROM ${table.name} WHERE id = ?`, [id])[0];
+  return row ? fromRow(table, row) : undefined;
+}
+
+/** The member's row with `id`, including soft-deleted rows; undefined when absent or not theirs. */
+export function findOwned<T>(
+  db: Db,
+  table: Table<Owned<T>>,
+  memberId: string,
+  id: string,
+): Owned<T> | undefined {
+  const row = all(db, `SELECT * FROM ${table.name} WHERE id = ? AND member_id = ?`, [
+    id,
+    memberId,
+  ])[0];
   return row ? fromRow(table, row) : undefined;
 }
 
@@ -208,19 +240,38 @@ export function findMany<T>(
   );
 }
 
-export type TableName =
-  'books' | 'book_formats' | 'reads' | 'sessions' | 'tags' | 'book_notes' | 'goals';
+/** Tables of personal rows, each with a `member_id` (ADR 0010). */
+export type PersonalTableName = 'reads' | 'sessions' | 'tags' | 'book_notes' | 'goals';
+export type TableName = 'books' | 'book_formats' | 'active_timer' | PersonalTableName;
+
+export interface RowMeta {
+  updatedAt: string;
+  deletedAt: string | null;
+}
 
 /** Sync metadata of any row (including soft-deleted ones), or undefined when absent. */
-export function rowMeta(
-  db: Db,
-  table: TableName,
-  id: string,
-): { updatedAt: string; deletedAt: string | null } | undefined {
-  const row = all<{ updated_at: string; deleted_at: string | null }>(
+export function rowMeta(db: Db, table: TableName, id: string): RowMeta | undefined {
+  const row = all<{ updated_at: string; deleted_at?: string | null }>(
     db,
-    `SELECT updated_at, deleted_at FROM ${table} WHERE id = ?`,
+    // The timer has no soft delete.
+    `SELECT updated_at${table === 'active_timer' ? '' : ', deleted_at'} FROM ${table} WHERE id = ?`,
     [id],
   )[0];
-  return row ? { updatedAt: row.updated_at, deletedAt: row.deleted_at } : undefined;
+  return row ? { updatedAt: row.updated_at, deletedAt: row.deleted_at ?? null } : undefined;
+}
+
+/** Sync metadata plus the member of a personal row, or undefined when absent. */
+export function personalRowMeta(
+  db: Db,
+  table: PersonalTableName,
+  id: string,
+): (RowMeta & { memberId: string }) | undefined {
+  const row = all<{ updated_at: string; deleted_at: string | null; member_id: string }>(
+    db,
+    `SELECT updated_at, deleted_at, member_id FROM ${table} WHERE id = ?`,
+    [id],
+  )[0];
+  return row
+    ? { updatedAt: row.updated_at, deletedAt: row.deleted_at, memberId: row.member_id }
+    : undefined;
 }

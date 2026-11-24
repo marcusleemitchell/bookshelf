@@ -210,6 +210,47 @@ describe('Notion mirror', () => {
     expect(after.body.sessions).toEqual({ created: 0, updated: 0, archived: 0, unchanged: 0 });
   });
 
+  it('mirrors only the owner’s shelf, sessions and notes', async () => {
+    setup();
+    const { book } = await seed();
+    const jo = env.addMember({ name: 'Jo' });
+    // Jo shares the book (same ISBN) and has her own reading and notes on it, and another book.
+    const shared = (
+      await jo.request<BookDetail>('POST', '/api/books', {
+        title: 'Mexican Gothic',
+        isbn13: '9780525620785',
+        status: 'finished',
+        rating: 2,
+      })
+    ).body;
+    expect(shared.id).toBe(book.id);
+    const own = (await jo.request<BookDetail>('POST', '/api/books', { title: 'Jo’s book' })).body;
+    await jo.request('POST', '/api/sessions', {
+      bookId: shared.id,
+      formatId: shared.formats[0]?.id,
+      startedAt: '2026-11-13T21:00:00Z',
+      endedAt: '2026-11-13T21:30:00Z',
+      progressUnit: 'percent',
+      endValue: 20,
+    });
+    await jo.request('POST', `/api/books/${own.id}/notes`, { kind: 'note', text: 'Private' });
+    const res = await run();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      books: { created: 1 },
+      sessions: { created: 1 },
+      notes: { created: 1 },
+    });
+    const [page] = fake.pagesIn('Bookshelf Books');
+    expect(page?.properties['Status']).toEqual({ select: { name: 'Reading' } });
+    expect(page?.properties['Rating']).toEqual({ number: null });
+
+    // Taking the book off the owner's shelf archives its page, though Jo still has it.
+    await env.request('DELETE', `/api/books/${book.id}`);
+    const after = await run();
+    expect(after.body.books).toEqual({ created: 0, updated: 0, archived: 1, unchanged: 0 });
+  });
+
   it('finds existing pages by Bookshelf ID when the stored mapping is lost (no duplicates)', async () => {
     setup();
     await seed();

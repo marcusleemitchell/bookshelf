@@ -9,6 +9,10 @@
  * mirrored content has not changed (by hash) are skipped; soft-deleted rows
  * have their pages archived. Requests are throttled to ~3/s and retried on
  * 429 (honouring Retry-After) and 5xx.
+ *
+ * Only the owner's reading is mirrored (ADR 0010): the books on their shelf
+ * (a removed shelf entry archives the page) with their status, rating, tags
+ * and reads, and their sessions and notes.
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -26,7 +30,8 @@ import {
 } from '../../shared/index.ts';
 import { nowIso, type AppContext } from '../context.ts';
 import { AppError, upstreamError } from '../http/errors.ts';
-import { listAllBooks } from '../repositories/books.ts';
+import { listShelfBooks } from '../repositories/books.ts';
+import { findOwner } from '../repositories/members.ts';
 import { bookFormats, bookReads, latestRead, readSessions } from '../repositories/records.ts';
 import {
   clearNotionPages,
@@ -254,12 +259,14 @@ function percentFraction(value: number | null): number | null {
   return value === null ? null : Math.round(value * 100) / 10_000;
 }
 
-function bookRows(ctx: AppContext, books: readonly Book[]): MirrorRow[] {
-  const tagNames = new Map(findMany(ctx.db, tagsTable).map((tag) => [tag.id, tag.name]));
+function bookRows(ctx: AppContext, ownerId: string, books: readonly Book[]): MirrorRow[] {
+  const tagNames = new Map(
+    findMany(ctx.db, tagsTable, 'member_id = ?', [ownerId]).map((tag) => [tag.id, tag.name]),
+  );
   const tz = ctx.config.timeZone;
   return books.map((book) => {
-    const reads = bookReads(ctx.db, book.id);
-    const last = latestRead(ctx.db, book.id);
+    const reads = bookReads(ctx.db, ownerId, book.id);
+    const last = latestRead(ctx.db, ownerId, book.id);
     const first = reads[0];
     return {
       id: book.id,
@@ -271,7 +278,7 @@ function bookRows(ctx: AppContext, books: readonly Book[]): MirrorRow[] {
         Status: select(STATUS_LABELS[book.status]),
         Rating: numberProp(book.rating),
         Progress: numberProp(
-          percentFraction(last ? currentProgress(readSessions(ctx.db, last.id)) : null),
+          percentFraction(last ? currentProgress(readSessions(ctx.db, ownerId, last.id)) : null),
         ),
         Formats: multiSelect(bookFormats(ctx.db, book.id).map((f) => FORMAT_LABELS[f.format])),
         Genres: multiSelect(book.genres),
@@ -445,8 +452,10 @@ export function createNotionMirror(
       return counts;
     };
 
-    const books = listAllBooks(ctx.db);
-    const bookCounts = await push('book', booksDb, bookRows(ctx, books));
+    const owner = findOwner(ctx.db);
+    if (!owner) throw new AppError(500, 'internal_error', 'No owner member exists');
+    const books = listShelfBooks(ctx.db, owner.id);
+    const bookCounts = await push('book', booksDb, bookRows(ctx, owner.id, books));
     const titles = new Map(books.map((book) => [book.id, book.title]));
     const bookPage = (bookId: string) => findNotionPage(ctx.db, 'book', bookId)?.pageId ?? null;
     const tz = ctx.config.timeZone;
@@ -454,27 +463,32 @@ export function createNotionMirror(
       findMany(ctx.db, formatsTable).map((format) => [format.id, FORMAT_LABELS[format.format]]),
     );
 
-    const sessionRows: MirrorRow[] = findMany(ctx.db, sessionsTable).map((s) => ({
-      id: s.id,
-      deleted: s.deletedAt !== null,
-      properties: {
-        Name: title(`${titles.get(s.bookId) ?? 'Unknown book'} — ${formatDate(s.startedAt, tz)}`),
-        'Bookshelf ID': richText(s.id),
-        Book: relation(bookPage(s.bookId)),
-        Date: date(s.startedAt, s.endedAt),
-        Minutes: numberProp(s.durationSeconds === null ? null : Math.round(s.durationSeconds / 60)),
-        Format: select(formatLabels.get(s.formatId) ?? null),
-        Unit: select(s.progressUnit),
-        Start: numberProp(s.startValue),
-        End: numberProp(s.endValue),
-        'Start %': numberProp(percentFraction(s.startPercent)),
-        'End %': numberProp(percentFraction(s.endPercent)),
-        Note: richText(s.note),
-      },
-    }));
+    const owned = 'member_id = ?';
+    const sessionRows: MirrorRow[] = findMany(ctx.db, sessionsTable, owned, [owner.id]).map(
+      (s) => ({
+        id: s.id,
+        deleted: s.deletedAt !== null,
+        properties: {
+          Name: title(`${titles.get(s.bookId) ?? 'Unknown book'} — ${formatDate(s.startedAt, tz)}`),
+          'Bookshelf ID': richText(s.id),
+          Book: relation(bookPage(s.bookId)),
+          Date: date(s.startedAt, s.endedAt),
+          Minutes: numberProp(
+            s.durationSeconds === null ? null : Math.round(s.durationSeconds / 60),
+          ),
+          Format: select(formatLabels.get(s.formatId) ?? null),
+          Unit: select(s.progressUnit),
+          Start: numberProp(s.startValue),
+          End: numberProp(s.endValue),
+          'Start %': numberProp(percentFraction(s.startPercent)),
+          'End %': numberProp(percentFraction(s.endPercent)),
+          Note: richText(s.note),
+        },
+      }),
+    );
     const sessionCounts = await push('session', sessionsDb, sessionRows);
 
-    const noteRows: MirrorRow[] = findMany(ctx.db, notesTable).map((n) => ({
+    const noteRows: MirrorRow[] = findMany(ctx.db, notesTable, owned, [owner.id]).map((n) => ({
       id: n.id,
       deleted: n.deletedAt !== null,
       properties: {

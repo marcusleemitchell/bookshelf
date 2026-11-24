@@ -14,6 +14,7 @@ import {
 } from '../../shared/index.ts';
 import { all } from '../db/database.ts';
 import { importBookpine, previewBookpine } from '../services/bookpine.ts';
+import { selfScope } from '../services/scope.ts';
 import { createTestEnv, image, json, type FetchCall, type TestEnv } from '../test/helpers.ts';
 
 const FIXTURE = readFileSync(
@@ -546,6 +547,64 @@ describe('POST /api/import/bookpine', () => {
     expect(report.covers).toEqual({ cached: 0, failed: 2 });
   });
 
+  it('imports into the signed-in member, reusing catalogue books with the same ISBN', async () => {
+    await runImport();
+    const ownerBooks = await books();
+    const ownerCounts = tableCounts();
+    const withIsbn = all<{ n: number }>(
+      env.ctx.db,
+      'SELECT COUNT(*) AS n FROM books WHERE isbn13 IS NOT NULL',
+    )[0]?.n as number;
+    expect(withIsbn).toBeGreaterThan(0);
+
+    const jo = env.addMember({ name: 'Jo' });
+    const res = await env.app.request('/api/import/bookpine', {
+      method: 'POST',
+      body: FIXTURE,
+      headers: { ...jo.headers, 'content-type': 'text/csv' },
+    });
+    expect(res.status).toBe(200);
+    const report = bookpineReportSchema.parse(await res.json());
+    expect(report.books).toMatchObject({
+      created: 16 - withIsbn,
+      matched: withIsbn,
+      updated: 0,
+      skipped: 0,
+    });
+    expect(report.reads.created).toBe(12);
+    expect(report.sessions.created).toBe(29);
+    expect(report.notes.created).toBe(2);
+    expect(report.tags.created).toBe(5);
+    expect(report.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining('already in the family’s books') as unknown,
+        }),
+      ]),
+    );
+    // Shared catalogue rows were reused; everything personal is Jo's own.
+    const joBooks = (await jo.request<BookListItem[]>('GET', '/api/books')).body;
+    expect(joBooks).toHaveLength(16);
+    expect(tableCounts()).toMatchObject({
+      books: (ownerCounts['books'] ?? 0) + 16 - withIsbn,
+      reads: (ownerCounts['reads'] ?? 0) * 2,
+      sessions: (ownerCounts['sessions'] ?? 0) * 2,
+      book_notes: (ownerCounts['book_notes'] ?? 0) * 2,
+      tags: (ownerCounts['tags'] ?? 0) * 2,
+    });
+    expect(await books()).toEqual(ownerBooks);
+
+    // Jo's re-import is idempotent; the owner's preview still sees their own links.
+    const again = await env.app.request('/api/import/bookpine/preview', {
+      method: 'POST',
+      body: FIXTURE,
+      headers: { ...jo.headers, 'content-type': 'text/csv' },
+    });
+    expect(bookpineReportSchema.parse(await again.json()).books.unchanged).toBe(16);
+    const ownerPreview = await post('/api/import/bookpine/preview', FIXTURE);
+    expect(bookpineReportSchema.parse(ownerPreview.body).books.unchanged).toBe(16);
+  });
+
   it('refuses a second import while one is running', async () => {
     let release: () => void = () => undefined;
     env.fetchMock.on(
@@ -557,8 +616,9 @@ describe('POST /api/import/bookpine', () => {
           };
         }),
     );
-    const first = importBookpine(env.ctx, FIXTURE);
-    await expect(previewBookpine(env.ctx, FIXTURE)).rejects.toMatchObject({
+    const owner = selfScope(env.owner);
+    const first = importBookpine(env.ctx, owner, FIXTURE);
+    await expect(previewBookpine(env.ctx, owner, FIXTURE)).rejects.toMatchObject({
       status: 409,
       message: 'A Bookpine import is already running',
     });
@@ -568,7 +628,7 @@ describe('POST /api/import/bookpine', () => {
     );
     release();
     await first;
-    expect((await previewBookpine(env.ctx, FIXTURE)).books.unchanged).toBe(16);
+    expect((await previewBookpine(env.ctx, owner, FIXTURE)).books.unchanged).toBe(16);
   });
 
   it('keeps provenance in backups so a restored library re-imports without duplicates', async () => {

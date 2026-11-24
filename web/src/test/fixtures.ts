@@ -470,8 +470,20 @@ export function candidate(overrides: Partial<BookCandidate> = {}): BookCandidate
 }
 
 /** Fictional family members (ADR 0010). */
-export const owner: MemberProfile = { id: IDS.owner, name: 'Alex', role: 'parent', hasPin: true };
-export const sibling: MemberProfile = { id: IDS.sibling, name: 'Jo', role: 'parent', hasPin: true };
+export const owner: MemberProfile = {
+  id: IDS.owner,
+  name: 'Alex',
+  role: 'parent',
+  isAdmin: true,
+  hasPin: true,
+};
+export const sibling: MemberProfile = {
+  id: IDS.sibling,
+  name: 'Jo',
+  role: 'parent',
+  isAdmin: false,
+  hasPin: true,
+};
 
 /** `GET /api/auth/state`: signed in as the owner unless `me` says otherwise. */
 export function authState(overrides: Partial<AuthState> = {}): AuthState {

@@ -70,12 +70,12 @@ describe('API basics', () => {
   });
 
   it('refuses to send responses that break the shared contract', async () => {
-    env.ctx.db
-      .prepare(
-        `INSERT INTO books (id, title, authors, genres, source, status, isbn13, created_at, updated_at)
-         VALUES ('11111111-1111-4111-8111-111111111111', 'Bad', '[]', '[]', 'manual', 'to_read', '123', 'x', 'x')`,
-      )
-      .run();
+    env.ctx.db.exec(
+      `INSERT INTO books (id, title, authors, genres, source, isbn13, created_at, updated_at)
+         VALUES ('11111111-1111-4111-8111-111111111111', 'Bad', '[]', '[]', 'manual', '123', 'x', 'x');
+       INSERT INTO shelf_entries (member_id, book_id, status, created_at, updated_at)
+         VALUES ('${env.owner.id}', '11111111-1111-4111-8111-111111111111', 'to_read', 'x', 'x');`,
+    );
     const res = await env.request('GET', '/api/books');
     expect(res.status).toBe(500);
     expect(errorResponseSchema.parse(res.body).error.message).toBe(

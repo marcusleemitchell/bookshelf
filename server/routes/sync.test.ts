@@ -359,21 +359,68 @@ describe('POST /api/sync', () => {
     expect((await getBook()).tagIds).toEqual([TAG_ID]);
   });
 
-  it('caches covers for synced books and clears them when removed', async () => {
+  it('caches the cover of a synced new book; later ops leave the catalogue alone', async () => {
     env.fetchMock.on('https://covers.example.org/', () => image());
     await sync(op('book', bookPayload({ coverUrl: 'https://covers.example.org/p.png' })));
     expect((await getBook()).coverPath).toBe(`${BOOK_ID}.png`);
-    // Same URL: the cached file is kept without refetching.
+    // The book exists now: catalogue fields in later ops are ignored (edited online only),
+    // while the member's rating is applied.
     await sync(
       op(
         'book',
-        bookPayload({ coverUrl: 'https://covers.example.org/p.png', rating: 4 }),
+        bookPayload({ coverUrl: null, title: 'Renamed offline', rating: 4 }),
         '2026-11-14T10:01:00.000Z',
       ),
     );
+    const book = await getBook();
+    expect(book).toMatchObject({ coverPath: `${BOOK_ID}.png`, title: 'Piranesi', rating: 4 });
     expect(env.fetchMock.calls).toHaveLength(1);
-    await sync(op('book', bookPayload({ coverUrl: null }), '2026-11-14T10:02:00.000Z'));
-    expect((await getBook()).coverPath).toBeNull();
+  });
+
+  it('resolves book ops against the member’s shelf entry, not the shared catalogue', async () => {
+    await seed();
+    const jo = env.addMember({ name: 'Jo' });
+    const joSync = async (...ops: SyncOp[]) =>
+      syncResponseSchema
+        .parse((await jo.request<SyncResponse>('POST', '/api/sync', { ops })).body)
+        .results.map((r) => r.error?.code ?? r.status);
+    // Jo puts the existing catalogue book on her shelf at 10:05.
+    expect(
+      await joSync(op('book', bookPayload({ status: 'to_read' }), '2026-11-14T10:05:00.000Z')),
+    ).toEqual(['applied']);
+    // The owner edits the catalogue later (12:00, the test clock).
+    expect(
+      (await env.request('PATCH', `/api/books/${BOOK_ID}`, { subtitle: 'A Novel' })).status,
+    ).toBe(200);
+    // Jo's 11:00 change is newer than her shelf entry, so it applies despite the newer catalogue row…
+    expect(
+      await joSync(op('book', bookPayload({ rating: 5 }), '2026-11-14T11:00:00.000Z')),
+    ).toEqual(['applied']);
+    // …and one older than her shelf entry is stale.
+    expect(
+      await joSync(op('book', bookPayload({ rating: 1 }), '2026-11-14T10:30:00.000Z')),
+    ).toEqual(['stale']);
+    const joBook = (await jo.request<BookDetail>('GET', `/api/books/${BOOK_ID}`)).body;
+    expect(joBook).toMatchObject({ subtitle: 'A Novel', status: 'reading', rating: 5 });
+    expect((await getBook()).rating).toBeNull();
+    // Removing it from Jo's shelf is last-write-wins against her entry too.
+    expect(await joSync(op('book', { id: BOOK_ID }, '2026-11-14T10:59:00.000Z', 'delete'))).toEqual(
+      ['stale'],
+    );
+    expect(await joSync(op('book', { id: BOOK_ID }, '2026-11-14T11:01:00.000Z', 'delete'))).toEqual(
+      ['applied'],
+    );
+    expect((await jo.request('GET', `/api/books/${BOOK_ID}`)).status).toBe(404);
+    expect((await env.request('GET', `/api/books/${BOOK_ID}`)).status).toBe(200);
+    // A deleted catalogue book comes back when a member puts it on their shelf again.
+    await sync(op('book', { id: BOOK_ID }, '2026-11-14T12:30:00.000Z', 'delete'));
+    expect((await env.request('GET', `/api/books/${BOOK_ID}`)).status).toBe(404);
+    expect(await joSync(op('book', bookPayload(), '2026-11-14T13:00:00.000Z'))).toEqual([
+      'applied',
+    ]);
+    expect(
+      (await jo.request<BookDetail>('GET', `/api/books/${BOOK_ID}`)).body.deletedAt,
+    ).toBeNull();
   });
 
   it('syncs the timer with last-write-wins and deletes it', async () => {

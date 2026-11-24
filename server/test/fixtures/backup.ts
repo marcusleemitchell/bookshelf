@@ -87,3 +87,90 @@ export const BACKUP_V1 = {
     timer: null,
   },
 } as const;
+
+const KINDRED = '11111111-1111-4111-8111-111111111111';
+const PHYSICAL = '22222222-2222-4222-8222-222222222222';
+const TAG = '66666666-6666-4666-8666-666666666666';
+
+/**
+ * A schema-version-5 backup as the server exported it just before family
+ * profiles (ADR 0010): status, rating and tag links on the books, one timer,
+ * import provenance, no members. Fictional data. It must restore into the
+ * owner.
+ */
+export const BACKUP_V5 = {
+  app: 'bookshelf',
+  schemaVersion: 5,
+  exportedAt: '2026-11-20T03:00:00.000Z',
+  data: {
+    books: [
+      { ...BACKUP_V1.data.books[0], status: 'paused', rating: 4, tagIds: [TAG] },
+      {
+        ...BACKUP_V1.data.books[0],
+        id: '77777777-7777-4777-8777-777777777777',
+        title: 'Parable of the Sower',
+        status: 'finished',
+        rating: null,
+        deletedAt: '2026-11-03T10:00:00.000Z',
+        tagIds: [],
+      },
+    ],
+    formats: BACKUP_V1.data.formats,
+    reads: BACKUP_V1.data.reads,
+    sessions: [{ ...BACKUP_V1.data.sessions[0], durationSeconds: null, source: 'bookpine' }],
+    tags: [
+      {
+        id: TAG,
+        name: 'Classics',
+        colour: '#112233',
+        createdAt: T,
+        updatedAt: T,
+        deletedAt: null,
+      },
+    ],
+    notes: [
+      {
+        id: '88888888-8888-4888-8888-888888888888',
+        bookId: KINDRED,
+        kind: 'quote',
+        text: 'A fictional quoted line.',
+        location: 'p. 9',
+        createdAt: T,
+        updatedAt: T,
+        deletedAt: null,
+      },
+    ],
+    goals: [
+      {
+        id: '99999999-9999-4999-8999-999999999999',
+        kind: 'books_per_year',
+        year: 2026,
+        target: 12,
+        createdAt: T,
+        updatedAt: T,
+        deletedAt: null,
+      },
+    ],
+    timer: {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      bookId: KINDRED,
+      formatId: PHYSICAL,
+      startedAt: T,
+      resumedAt: T,
+      pausedAt: null,
+      accumulatedSeconds: 0,
+      createdAt: T,
+      updatedAt: T,
+    },
+    importLinks: [
+      {
+        source: 'bookpine',
+        entity: 'book',
+        externalId: 'kindred',
+        localId: KINDRED,
+        imported: { title: 'Kindred' },
+        importedAt: T,
+      },
+    ],
+  },
+} as const;

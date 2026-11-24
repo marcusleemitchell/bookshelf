@@ -175,6 +175,86 @@ describe('POST /api/books', () => {
   });
 });
 
+describe('POST /api/books with a book already in the catalogue', () => {
+  it('reuses a live catalogue book with the same ISBN-13 for another member', async () => {
+    const tag = await addTag('Classics');
+    const owners = await addBook({
+      title: 'Dune',
+      isbn13: '9780441013593',
+      status: 'reading',
+      rating: 4,
+      tagIds: [tag.id],
+      formats: [{ format: 'physical', pageCount: 412 }],
+    });
+    const jo = env.addMember({ name: 'Jo' });
+    const joTag = (await jo.request<Tag>('POST', '/api/tags', { name: 'Classics' })).body;
+    const res = await jo.request<BookDetail>('POST', '/api/books', {
+      id: '12121212-1212-4212-8212-121212121212',
+      title: 'Dune (another edition title)',
+      isbn10: '0441013597',
+      status: 'finished',
+      tagIds: [joTag.id],
+      formats: [
+        { format: 'physical', pageCount: 500 },
+        { format: 'audiobook', audioDurationSeconds: 75_600 },
+      ],
+    });
+    expect(res.status).toBe(201);
+    // The existing book (its id, not the client's), with Jo's own shelf fields.
+    expect(res.body).toMatchObject({
+      id: owners.id,
+      title: 'Dune',
+      status: 'finished',
+      rating: null,
+      tagIds: [joTag.id],
+    });
+    expect(res.body.reads).toEqual([expect.objectContaining({ outcome: 'finished', number: 1 })]);
+    // Only the missing kind of format was added; the physical one is shared as it was.
+    expect(res.body.formats.map((f) => [f.format, f.pageCount])).toEqual([
+      ['physical', 412],
+      ['audiobook', null],
+    ]);
+    const mine = (await env.request<BookDetail>('GET', `/api/books/${owners.id}`)).body;
+    expect(mine).toMatchObject({ status: 'reading', rating: 4, tagIds: [tag.id] });
+    expect(mine.formats).toHaveLength(2);
+    expect(
+      (await env.request('GET', '/api/books/12121212-1212-4212-8212-121212121212')).status,
+    ).toBe(404);
+
+    // Already on the shelf: 409.
+    const again = await jo.request('POST', '/api/books', {
+      title: 'Dune',
+      isbn13: '9780441013593',
+    });
+    expectError(again, 409, 'conflict');
+    expect(errorResponseSchema.parse(again.body).error.message).toBe(
+      'This book is already on your shelf',
+    );
+
+    // Removed from the shelf, it can be added again (a fresh shelf entry, new read).
+    expect((await jo.request('DELETE', `/api/books/${owners.id}`)).status).toBe(204);
+    const back = await jo.request<BookDetail>('POST', '/api/books', {
+      title: 'Dune',
+      isbn13: '9780441013593',
+      status: 'to_read',
+    });
+    expect(back.status).toBe(201);
+    expect(back.body).toMatchObject({ id: owners.id, status: 'to_read', reads: [], tagIds: [] });
+  });
+
+  it('refuses the member’s own duplicate and ignores deleted catalogue books', async () => {
+    const book = await addBook({ isbn13: '9780441013593' });
+    expectError(
+      await env.request('POST', '/api/books', { title: 'Dune', isbn13: '9780441013593' }),
+      409,
+      'conflict',
+    );
+    expect((await env.request('DELETE', `/api/books/${book.id}`)).status).toBe(204);
+    const fresh = await addBook({ isbn13: '9780441013593' });
+    expect(fresh.id).not.toBe(book.id);
+  });
+});
+
 describe('GET /api/books', () => {
   it('lists live books by title with filters', async () => {
     const tag = await addTag('Favourites');

@@ -1,5 +1,6 @@
 /**
- * Statistics and calendar (SPEC §5). Sessions are bucketed into the local
+ * Statistics and calendar (SPEC §5), always of one member's reading
+ * (ADR 0010). Sessions are bucketed into the local
  * day (BOOKSHELF_TZ) on which they started; sessions of deleted books and
  * deleted sessions are excluded. Sessions with an unknown duration count as
  * sessions (and for the calendar and streaks) but add no time.
@@ -31,6 +32,7 @@ import { all, type SqlValue } from '../db/database.ts';
 import { validationError } from '../http/errors.ts';
 import { fromRow, sessionsTable } from '../repositories/tables.ts';
 import { coverSrc } from './covers.ts';
+import type { MemberScope } from './scope.ts';
 
 /** Longest range accepted by `GET /api/stats/daily` (about ten years). */
 export const MAX_DAILY_RANGE_DAYS = 3660;
@@ -85,8 +87,12 @@ interface JoinedRow extends Record<string, unknown> {
   b_cover_url: string | null;
 }
 
-/** Live sessions (of live books) started within `range`, with format and book details. */
-export function loadStatSessions(ctx: AppContext, range: DateRange = {}): StatSession[] {
+/** The member's live sessions (of live books) started within `range`, with format and book details. */
+export function loadStatSessions(
+  ctx: AppContext,
+  memberId: string,
+  range: DateRange = {},
+): StatSession[] {
   const filter = rangeParams(ctx, 's.started_at', range);
   const rows = all<JoinedRow>(
     ctx.db,
@@ -96,9 +102,9 @@ export function loadStatSessions(ctx: AppContext, range: DateRange = {}): StatSe
      FROM sessions s
      JOIN book_formats f ON f.id = s.format_id
      JOIN books b ON b.id = s.book_id
-     WHERE s.deleted_at IS NULL AND b.deleted_at IS NULL${filter.sql}
+     WHERE s.member_id = ? AND s.deleted_at IS NULL AND b.deleted_at IS NULL${filter.sql}
      ORDER BY s.started_at, s.id`,
-    filter.params,
+    [memberId, ...filter.params],
   );
   return rows.map((row) => {
     const session = fromRow(sessionsTable, row);
@@ -129,8 +135,15 @@ export interface FinishedRead {
   book: StatBook & { rating: number | null };
 }
 
-/** Finished reads (of live books) whose local finish date falls within `range`. */
-export function loadFinishedReads(ctx: AppContext, range: DateRange = {}): FinishedRead[] {
+/**
+ * The member's finished reads (of live books) whose local finish date falls
+ * within `range`, with their rating of the book.
+ */
+export function loadFinishedReads(
+  ctx: AppContext,
+  memberId: string,
+  range: DateRange = {},
+): FinishedRead[] {
   const filter = rangeParams(ctx, 'r.finished_at', range);
   const rows = all<{
     id: string;
@@ -144,12 +157,13 @@ export function loadFinishedReads(ctx: AppContext, range: DateRange = {}): Finis
     rating: number | null;
   }>(
     ctx.db,
-    `SELECT r.id, r.finished_at, b.id AS book_id, b.title, b.authors, b.genres, b.cover_path, b.cover_url, b.rating
+    `SELECT r.id, r.finished_at, b.id AS book_id, b.title, b.authors, b.genres, b.cover_path, b.cover_url, se.rating
      FROM reads r JOIN books b ON b.id = r.book_id
-     WHERE r.outcome = 'finished' AND r.finished_at IS NOT NULL
+     LEFT JOIN shelf_entries se ON se.book_id = r.book_id AND se.member_id = r.member_id
+     WHERE r.member_id = ? AND r.outcome = 'finished' AND r.finished_at IS NOT NULL
        AND r.deleted_at IS NULL AND b.deleted_at IS NULL${filter.sql}
      ORDER BY r.finished_at, r.id`,
-    filter.params,
+    [memberId, ...filter.params],
   );
   return rows.map((row) => ({
     readId: row.id,
@@ -167,11 +181,15 @@ export function loadFinishedReads(ctx: AppContext, range: DateRange = {}): Finis
   }));
 }
 
-function loadBookTags(ctx: AppContext): Map<string, { tagId: string; name: string }[]> {
+function loadBookTags(
+  ctx: AppContext,
+  memberId: string,
+): Map<string, { tagId: string; name: string }[]> {
   const rows = all<{ book_id: string; tag_id: string; name: string }>(
     ctx.db,
     `SELECT bt.book_id, bt.tag_id, t.name FROM book_tags bt JOIN tags t ON t.id = bt.tag_id
-     WHERE t.deleted_at IS NULL ORDER BY t.name_key`,
+     WHERE t.member_id = ? AND t.deleted_at IS NULL ORDER BY t.name_key`,
+    [memberId],
   );
   const byBook = new Map<string, { tagId: string; name: string }[]>();
   for (const row of rows) {
@@ -223,9 +241,10 @@ export function today(ctx: AppContext): DateKey {
 }
 
 /** `GET /api/stats/summary`. Omitted bounds mean "all time". */
-export function statsSummary(ctx: AppContext, range: DateRange): StatsSummary {
-  const items = loadStatSessions(ctx, range);
-  const tagsByBook = loadBookTags(ctx);
+export function statsSummary(ctx: AppContext, scope: MemberScope, range: DateRange): StatsSummary {
+  const memberId = scope.member.id;
+  const items = loadStatSessions(ctx, memberId, range);
+  const tagsByBook = loadBookTags(ctx, memberId);
   const totals = emptyTotals();
   const byFormat = new Map<FormatType, Totals>();
   const byGenre = new Map<string, Totals>();
@@ -247,7 +266,7 @@ export function statsSummary(ctx: AppContext, range: DateRange): StatsSummary {
   const rangeEnd = range.to ? startOfLocalDay(addDays(range.to, 1), ctx.config.timeZone) : now;
   const speedRef = rangeEnd < now ? rangeEnd : now;
   const speedFrom = addDays(localDateKey(speedRef, ctx.config.timeZone), -30);
-  const speedInputs = loadStatSessions(ctx, { from: speedFrom }).map((item) => ({
+  const speedInputs = loadStatSessions(ctx, memberId, { from: speedFrom }).map((item) => ({
     session: item.session,
     format: item.format,
   }));
@@ -257,7 +276,7 @@ export function statsSummary(ctx: AppContext, range: DateRange): StatsSummary {
     to: range.to ?? null,
     totals: {
       ...totals,
-      booksFinished: loadFinishedReads(ctx, range).length,
+      booksFinished: loadFinishedReads(ctx, memberId, range).length,
       untimedSessions: items.filter((item) => item.session.durationSeconds === null).length,
     },
     byFormat: sortedEntries(byFormat).map(([format, t]) => ({ format, ...t })),
@@ -273,7 +292,7 @@ export function statsSummary(ctx: AppContext, range: DateRange): StatsSummary {
 }
 
 /** `GET /api/stats/daily`. Defaults to the 30 days ending today (or ending `to`). */
-export function statsDaily(ctx: AppContext, range: DateRange): StatsDaily {
+export function statsDaily(ctx: AppContext, scope: MemberScope, range: DateRange): StatsDaily {
   const to = range.to ?? today(ctx);
   const from = range.from ?? addDays(to, -29);
   if (from > to) throw validationError('`from` must not be after `to`');
@@ -295,7 +314,7 @@ export function statsDaily(ctx: AppContext, range: DateRange): StatsDaily {
     untimedSessions: 0,
   });
   const byDay = new Map<DateKey, DayTotals>();
-  for (const item of loadStatSessions(ctx, { from, to })) {
+  for (const item of loadStatSessions(ctx, scope.member.id, { from, to })) {
     const day = byDay.get(item.day) ?? empty();
     day.seconds += knownSeconds(item.session);
     day.pages += sessionPages(item.session, item.format);
@@ -323,21 +342,22 @@ export function statsDaily(ctx: AppContext, range: DateRange): StatsDaily {
 }
 
 /** `GET /api/stats/streaks`. */
-export function statsStreaks(ctx: AppContext): StreaksResponse {
+export function statsStreaks(ctx: AppContext, scope: MemberScope): StreaksResponse {
   const days = all<{ started_at: string }>(
     ctx.db,
     `SELECT s.started_at FROM sessions s JOIN books b ON b.id = s.book_id
-     WHERE s.deleted_at IS NULL AND b.deleted_at IS NULL`,
+     WHERE s.member_id = ? AND s.deleted_at IS NULL AND b.deleted_at IS NULL`,
+    [scope.member.id],
   ).map((row) => localDateKey(row.started_at, ctx.config.timeZone));
   const todayKey = today(ctx);
   return { ...computeStreaks(days, todayKey), today: todayKey };
 }
 
 /** `GET /api/stats/year/:year`. */
-export function yearInReview(ctx: AppContext, year: number): YearInReview {
+export function yearInReview(ctx: AppContext, scope: MemberScope, year: number): YearInReview {
   const range = { from: `${year}-01-01`, to: `${year}-12-31` };
-  const items = loadStatSessions(ctx, range);
-  const finished = loadFinishedReads(ctx, range);
+  const items = loadStatSessions(ctx, scope.member.id, range);
+  const finished = loadFinishedReads(ctx, scope.member.id, range);
   const totals = emptyTotals();
   const months = new Map<string, Totals & { booksFinished: number }>();
   for (let m = 1; m <= 12; m += 1) {
@@ -392,7 +412,11 @@ export function yearInReview(ctx: AppContext, year: number): YearInReview {
  * `GET /api/calendar?month=YYYY-MM`: per-day books read, most minutes first.
  * Sessions with an unknown duration put the book on the day without minutes.
  */
-export function calendarMonth(ctx: AppContext, month: string): CalendarResponse {
+export function calendarMonth(
+  ctx: AppContext,
+  scope: MemberScope,
+  month: string,
+): CalendarResponse {
   const range = monthRange(month);
   interface DayEntry {
     title: string;
@@ -401,7 +425,7 @@ export function calendarMonth(ctx: AppContext, month: string): CalendarResponse 
     untimedSessions: number;
   }
   const byDay = new Map<DateKey, Map<string, DayEntry>>();
-  for (const item of loadStatSessions(ctx, range)) {
+  for (const item of loadStatSessions(ctx, scope.member.id, range)) {
     const books = byDay.get(item.day) ?? new Map<string, DayEntry>();
     const entry = books.get(item.book.id) ?? {
       title: item.book.title,

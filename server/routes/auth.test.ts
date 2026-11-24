@@ -112,13 +112,19 @@ describe('GET /api/auth/state', () => {
   it('asks for setup until a parent has a PIN, listing profiles without secrets', async () => {
     expect(await state()).toEqual({
       setupRequired: true,
-      members: [{ id: env.owner.id, name: 'Owner', role: 'parent', hasPin: false }],
+      members: [{ id: env.owner.id, name: 'Owner', role: 'parent', isAdmin: true, hasPin: false }],
       me: null,
     });
     env.cookie = await setUpOwner();
     const after = await state();
     expect(after.setupRequired).toBe(false);
-    expect(after.me).toEqual({ id: env.owner.id, name: 'Sam', role: 'parent', hasPin: true });
+    expect(after.me).toEqual({
+      id: env.owner.id,
+      name: 'Sam',
+      role: 'parent',
+      isAdmin: true,
+      hasPin: true,
+    });
     expect(JSON.stringify(after)).not.toMatch(/scrypt|pin_hash|pinHash/);
   });
 });
@@ -128,7 +134,7 @@ describe('POST /api/auth/setup', () => {
     const res = await env.request('POST', '/api/auth/setup', { name: '  Sam  ', pin: '2468' });
     expect(res.status).toBe(200);
     expect(signInResponseSchema.parse(res.body)).toEqual({
-      member: { id: env.owner.id, name: 'Sam', role: 'parent', hasPin: true },
+      member: { id: env.owner.id, name: 'Sam', role: 'parent', isAdmin: true, hasPin: true },
     });
     const header = res.headers.get('set-cookie') ?? '';
     expect(header).toContain('HttpOnly');

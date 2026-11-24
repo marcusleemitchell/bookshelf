@@ -74,7 +74,8 @@ const timestamps = {
 };
 
 // Shared field definitions (used by entities and request bodies).
-const bookFields = {
+/** Bibliographic fields of a catalogue book, shared by the family (ADR 0010). */
+const catalogueFields = {
   title: z.string().trim().min(1).max(500),
   subtitle: optionalText(500),
   authors: z.array(z.string().trim().min(1).max(200)).max(50),
@@ -88,9 +89,16 @@ const bookFields = {
   genres: z.array(z.string().trim().min(1).max(100)).max(50),
   source: bookSourceSchema,
   sourceId: optionalText(200),
+};
+
+/** A member's own fields for a book on their shelf (ADR 0010). */
+const shelfFields = {
   status: bookStatusSchema,
   rating: ratingSchema.nullable(),
 };
+
+/** A book as one member sees it: the catalogue fields plus their shelf entry. */
+const bookFields = { ...catalogueFields, ...shelfFields };
 
 const formatFields = {
   format: formatTypeSchema,
@@ -139,7 +147,34 @@ const tagFields = {
 // Entities (SPEC §4)
 // ---------------------------------------------------------------------------
 
-/** A book row as stored (without its tag links). */
+/** A catalogue book as stored in `books`: shared by the family, without shelf fields. */
+export const catalogueBookSchema = z.object({
+  id: idSchema,
+  ...catalogueFields,
+  /** Cached cover file name inside the data dir's `covers/` folder (server-managed). */
+  coverPath: z.string().nullable(),
+  ...timestamps,
+});
+export type CatalogueBook = z.infer<typeof catalogueBookSchema>;
+
+/**
+ * A member's shelf entry for a catalogue book: their status and rating. A
+ * book is on a member's shelf while the entry is live (`deletedAt` null).
+ */
+export const shelfEntrySchema = z.object({
+  memberId: idSchema,
+  bookId: idSchema,
+  ...shelfFields,
+  ...timestamps,
+});
+export type ShelfEntry = z.infer<typeof shelfEntrySchema>;
+
+/**
+ * A book as one member sees it (without its tag links): the catalogue row
+ * with the member's status and rating. `createdAt` is when it was put on the
+ * member's shelf; `updatedAt` is the later of the catalogue row's and the
+ * shelf entry's.
+ */
 export const bookRecordSchema = z.object({
   id: idSchema,
   ...bookFields,
@@ -231,6 +266,7 @@ export const errorCodeSchema = z.enum([
   'notion_busy',
   'unsupported_backup',
   'unauthorised',
+  'forbidden',
   'too_many_attempts',
   'internal_error',
 ]);
@@ -266,6 +302,8 @@ export const memberProfileSchema = z.object({
   id: idSchema,
   name: z.string(),
   role: memberRoleSchema,
+  /** Admins see and change every member's data except private notes (ADR 0010). */
+  isAdmin: z.boolean(),
   hasPin: z.boolean(),
 });
 export type MemberProfile = z.infer<typeof memberProfileSchema>;
@@ -828,7 +866,14 @@ export const backupSessionSchema = sessionSchema.extend({
   source: sessionSourceSchema.default('app'),
 });
 
-export const backupDataSchema = z.object({
+/** First schema version whose backups hold the whole family (ADR 0010): members, shelves, `memberId`. */
+export const FAMILY_BACKUP_VERSION = 7;
+
+/**
+ * Data of a backup from before family profiles (schema versions 1–6): one
+ * person's library, with status, rating and tag links on the books.
+ */
+export const legacyBackupDataSchema = z.object({
   books: z.array(bookSchema),
   formats: z.array(bookFormatSchema),
   reads: z.array(readSchema),
@@ -840,16 +885,72 @@ export const backupDataSchema = z.object({
   /** Import provenance (schema version 4+); absent in older backups. */
   importLinks: z.array(importLinkSchema).default([]),
 });
+export type LegacyBackupData = z.infer<typeof legacyBackupDataSchema>;
+
+const owned = { memberId: idSchema };
+
+/** A member in a backup: never their PIN hash, failed attempts, lock or sign-in sessions. */
+export const backupMemberSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(50),
+  role: memberRoleSchema,
+  isAdmin: z.boolean(),
+  ...timestamps,
+});
+export type BackupMember = z.infer<typeof backupMemberSchema>;
+
+/** A shelf entry in a backup, with the IDs of the member's tags on the book. */
+export const backupShelfEntrySchema = shelfEntrySchema.extend({ tagIds: z.array(idSchema) });
+
+/** Data of a family backup (schema version {@link FAMILY_BACKUP_VERSION}+). */
+export const backupDataSchema = z.object({
+  members: z.array(backupMemberSchema),
+  books: z.array(catalogueBookSchema),
+  shelfEntries: z.array(backupShelfEntrySchema),
+  formats: z.array(bookFormatSchema),
+  reads: z.array(readSchema.extend(owned)),
+  sessions: z.array(sessionSchema.extend(owned)),
+  tags: z.array(tagSchema.extend(owned)),
+  /** `shared`: whether the parents may see the note (private by default). */
+  notes: z.array(bookNoteSchema.extend({ ...owned, shared: z.boolean().default(false) })),
+  goals: z.array(goalSchema.extend(owned)),
+  /** At most one timer per member. */
+  timers: z.array(activeTimerSchema.extend(owned)),
+  importLinks: z.array(importLinkSchema.extend(owned)),
+});
 export type BackupData = z.infer<typeof backupDataSchema>;
 
-export const backupEnvelopeSchema = z.object({
+const envelopeFields = {
   app: z.literal('bookshelf'),
-  /** Highest applied migration version when exported. */
-  schemaVersion: z.int().min(1),
   exportedAt: instantSchema,
+};
+
+export const familyBackupEnvelopeSchema = z.object({
+  ...envelopeFields,
+  /** Highest applied migration version when exported. */
+  schemaVersion: z.int().min(FAMILY_BACKUP_VERSION),
   data: backupDataSchema,
 });
+
+export const legacyBackupEnvelopeSchema = z.object({
+  ...envelopeFields,
+  schemaVersion: z
+    .int()
+    .min(1)
+    .max(FAMILY_BACKUP_VERSION - 1),
+  data: legacyBackupDataSchema,
+});
+
+/**
+ * A backup file: the family format, or one from before family profiles,
+ * which restores into the owner. The schema version decides the format.
+ */
+export const backupEnvelopeSchema = z.union([
+  familyBackupEnvelopeSchema,
+  legacyBackupEnvelopeSchema,
+]);
 export type BackupEnvelope = z.infer<typeof backupEnvelopeSchema>;
+export type FamilyBackupEnvelope = z.infer<typeof familyBackupEnvelopeSchema>;
 
 export const backupCountsSchema = z.object({
   books: z.int().min(0),

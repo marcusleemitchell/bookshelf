@@ -1,5 +1,7 @@
 /**
- * Data routes: offline sync, JSON backup export/import and the Notion mirror.
+ * Data routes: offline sync (the signed-in member's data), and the
+ * household-wide JSON backup export/import and Notion mirror, which only
+ * parents and admins may use (ADR 0010).
  */
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -13,22 +15,27 @@ import {
   syncResponseSchema,
 } from '../../shared/index.ts';
 import type { AppContext } from '../context.ts';
+import type { AuthEnv } from '../http/auth.ts';
 import { AppError } from '../http/errors.ts';
 import { readJson, respond } from '../http/validate.ts';
 import { exportBackup, importBackup } from '../services/backup.ts';
 import type { NotionMirror } from '../services/notion.ts';
+import { parentsOnly, requestScope } from '../services/scope.ts';
 import { processSync } from '../services/sync.ts';
 
 /** Largest accepted backup upload. */
 export const MAX_IMPORT_BYTES = 100 * 1024 * 1024;
 
-export function dataRoutes(ctx: AppContext, notion: NotionMirror): Hono {
-  const app = new Hono();
+export function dataRoutes(ctx: AppContext, notion: NotionMirror): Hono<AuthEnv> {
+  const app = new Hono<AuthEnv>();
 
   app.post('/sync', async (c) => {
     const { ops } = await readJson(c, syncRequestSchema);
-    return respond(c, syncResponseSchema, await processSync(ctx, ops));
+    return respond(c, syncResponseSchema, await processSync(ctx, requestScope(c), ops));
   });
+
+  // Checked before the body is read, so a child's upload is refused straight away.
+  app.use('/backup/*', parentsOnly('use backups and Notion'));
 
   app.get('/backup/export', (c) => {
     const envelope = exportBackup(ctx);

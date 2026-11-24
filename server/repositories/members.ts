@@ -1,14 +1,16 @@
 /**
- * Family members and their sign-in sessions (ADR 0010). Server-internal
- * tables: neither is synced, and backups leave both out.
+ * Family members and their sign-in sessions (ADR 0010). Neither is synced;
+ * backups hold members' profiles (never PIN state) but no sessions.
  */
 import type { MemberRole } from '../../shared/index.ts';
-import { all, run, type Db } from '../db/database.ts';
+import { all, run, type Db, type SqlValue } from '../db/database.ts';
 
 export interface MemberRow {
   id: string;
   name: string;
   role: MemberRole;
+  /** Admins see and change every member's data except private notes (ADR 0010). */
+  isAdmin: boolean;
   pinHash: string | null;
   failedPinAttempts: number;
   lockedUntil: string | null;
@@ -16,36 +18,88 @@ export interface MemberRow {
   updatedAt: string;
 }
 
-const MEMBER_COLUMNS = `id, name, role, pin_hash AS pinHash,
+const MEMBER_COLUMNS = `id, name, role, is_admin AS isAdmin, pin_hash AS pinHash,
   failed_pin_attempts AS failedPinAttempts, locked_until AS lockedUntil,
   created_at AS createdAt, updated_at AS updatedAt`;
 
+/** Members matching `where`, oldest first (SQLite stores the admin flag as 0/1). */
+function selectMembers(db: Db, where: string, params: readonly SqlValue[] = []): MemberRow[] {
+  return all<Omit<MemberRow, 'isAdmin'> & { isAdmin: number }>(
+    db,
+    `SELECT ${MEMBER_COLUMNS} FROM members WHERE ${where} ORDER BY created_at, id`,
+    params,
+  ).map((row) => ({ ...row, isAdmin: row.isAdmin === 1 }));
+}
+
 /** Live members, oldest first (the owner leads the profile picker). */
 export function listMembers(db: Db): MemberRow[] {
-  return all<MemberRow>(
-    db,
-    `SELECT ${MEMBER_COLUMNS} FROM members WHERE deleted_at IS NULL ORDER BY created_at, id`,
-  );
+  return selectMembers(db, 'deleted_at IS NULL');
 }
 
 export function findMember(db: Db, id: string): MemberRow | null {
-  return (
-    all<MemberRow>(
-      db,
-      `SELECT ${MEMBER_COLUMNS} FROM members WHERE id = ? AND deleted_at IS NULL`,
-      [id],
-    )[0] ?? null
+  return selectMembers(db, 'id = ? AND deleted_at IS NULL', [id])[0] ?? null;
+}
+
+/**
+ * The owner: the oldest live admin (migration 0006 made the member created
+ * by migration 0005 the admin). Backups from before family profiles restore
+ * into the owner, the Notion mirror shows the owner's reading, and the
+ * Bookpine CLI imports into the owner by default.
+ */
+export function findOwner(db: Db): MemberRow | null {
+  return selectMembers(db, 'is_admin = 1 AND deleted_at IS NULL')[0] ?? null;
+}
+
+/** A member in a backup: profile fields and timestamps, never PIN state or sessions. */
+export interface MemberRecord {
+  id: string;
+  name: string;
+  role: MemberRole;
+  isAdmin: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/** Every member, including removed ones, oldest first (for backups). */
+export function listMemberRecords(db: Db): MemberRecord[] {
+  return all<Omit<MemberRecord, 'isAdmin'> & { isAdmin: number }>(
+    db,
+    `SELECT id, name, role, is_admin AS isAdmin, created_at AS createdAt,
+       updated_at AS updatedAt, deleted_at AS deletedAt
+     FROM members ORDER BY created_at, id`,
+  ).map((row) => ({ ...row, isAdmin: row.isAdmin === 1 }));
+}
+
+/**
+ * Restores a member from a backup: inserts it without a PIN, or updates the
+ * profile fields of an existing member while keeping its PIN hash, failed
+ * attempts, lock and sign-in sessions.
+ */
+export function upsertMemberRecord(db: Db, member: MemberRecord): void {
+  run(
+    db,
+    `INSERT INTO members (id, name, role, is_admin, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET name = excluded.name, role = excluded.role,
+       is_admin = excluded.is_admin, created_at = excluded.created_at,
+       updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`,
+    [
+      member.id,
+      member.name,
+      member.role,
+      member.isAdmin ? 1 : 0,
+      member.createdAt,
+      member.updatedAt,
+      member.deletedAt,
+    ],
   );
 }
 
-/** The owner: the oldest live parent (created by migration 0005). */
-export function findOwner(db: Db): MemberRow | null {
+/** True when at least one live member is an admin. */
+export function hasLiveAdmin(db: Db): boolean {
   return (
-    all<MemberRow>(
-      db,
-      `SELECT ${MEMBER_COLUMNS} FROM members
-       WHERE role = 'parent' AND deleted_at IS NULL ORDER BY created_at, id LIMIT 1`,
-    )[0] ?? null
+    all(db, 'SELECT 1 FROM members WHERE is_admin = 1 AND deleted_at IS NULL LIMIT 1').length > 0
   );
 }
 

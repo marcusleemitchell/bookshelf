@@ -5,7 +5,7 @@
  */
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Book } from '../../shared/index.ts';
+import type { CatalogueBook } from '../../shared/index.ts';
 import type { AppContext } from '../context.ts';
 import { setCoverPath } from '../repositories/books.ts';
 import { fetchOk, OutboundError } from './outbound.ts';
@@ -74,7 +74,9 @@ export function clearCover(ctx: AppContext, bookId: string): void {
 }
 
 /** Relative URL clients use to display a book's cover, or null when it has none. */
-export function coverSrc(book: Pick<Book, 'id' | 'coverPath' | 'coverUrl'>): string | null {
+export function coverSrc(
+  book: Pick<CatalogueBook, 'id' | 'coverPath' | 'coverUrl'>,
+): string | null {
   return book.coverPath || book.coverUrl ? `/api/covers/${book.id}` : null;
 }
 
@@ -96,7 +98,10 @@ function readCached(ctx: AppContext, fileName: string | null): CoverResult | nul
 }
 
 /** Resolves what `GET /api/covers/:bookId` should return. */
-export async function resolveCover(ctx: AppContext, book: Book): Promise<CoverResult> {
+export async function resolveCover(
+  ctx: AppContext,
+  book: Pick<CatalogueBook, 'id' | 'coverPath' | 'coverUrl'>,
+): Promise<CoverResult> {
   const cached = readCached(ctx, book.coverPath);
   if (cached) return cached;
   if (!book.coverUrl) return { kind: 'none' };

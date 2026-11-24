@@ -1,6 +1,6 @@
 # 0010. Family profiles: shared catalogue, personal shelves, light PIN sign-in
 
-- Status: accepted (step 1 implemented: members, PIN sign-in, migration 0005)
+- Status: accepted (steps 1–2a implemented: members and PIN sign-in, migration 0005; per-member data on the server with the admin flag, shelf entries and isolation tests, migrations 0006–0007)
 - Date: 23/11/2026; amended 24/11/2026 (admin, view as, profile switching, comparisons)
 - Amends: ADR 0002 (the tailnet is no longer the only boundary), ADR 0004 (last-write-wins now only applies to rows one member owns)
 
@@ -24,7 +24,8 @@ Bookshelf is single-user with no accounts (SPEC §1); ADR 0002 makes the tailnet
 
 - Shared by the family: `books` (bibliographic data and genres), `book_formats`, the cover cache.
 - Per member (`member_id`): a new `shelf_entries` table (member, book, status, rating) that takes over `status` and `rating` from `books`, plus `reads`, `sessions`, `book_notes`, `tags`/`book_tags`, `goals`, `active_timer` and `import_links`. The timer singleton becomes one per member; tag names and goal periods become unique per member.
-- A book is on a member's shelf when they have a live shelf entry; the library screen shows the member's shelf, and adding a book that is already in the catalogue only adds the shelf entry.
+- A book is on a member's shelf when they have a live shelf entry; the library screen shows the member's shelf, and adding a book that is already in the catalogue only adds the shelf entry: `POST /api/books` reuses a live catalogue book with the same ISBN-13 (409 when it is already on the member's shelf).
+- Deleting a book removes it from the member's own shelf (their shelf entry, reads, sessions, notes, tag links and timer on it); the catalogue book and its formats are soft-deleted only when no shelf has it any more. Children may do this too.
 
 **Permissions.**
 

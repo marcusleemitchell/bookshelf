@@ -1,5 +1,6 @@
 /**
- * Import routes (SPEC §8): Bookpine CSV preview (dry run) and import. The
+ * Import routes (SPEC §8): Bookpine CSV preview (dry run) and import into
+ * the signed-in member's shelf (parents and admins only). The
  * CSV comes as a multipart upload (`file` field) or as the raw request body,
  * up to {@link MAX_BOOKPINE_CSV_BYTES}.
  */
@@ -8,9 +9,11 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { bookpineReportSchema, MAX_BOOKPINE_CSV_BYTES } from '../../shared/index.ts';
 import type { AppContext } from '../context.ts';
+import type { AuthEnv } from '../http/auth.ts';
 import { validationError } from '../http/errors.ts';
 import { respond } from '../http/validate.ts';
 import { importBookpine, previewBookpine } from '../services/bookpine.ts';
+import { parentsOnly, requestScope } from '../services/scope.ts';
 
 const csvLimit = bodyLimit({
   maxSize: MAX_BOOKPINE_CSV_BYTES,
@@ -38,13 +41,15 @@ async function readCsv(c: Context): Promise<string> {
   return text;
 }
 
-export function importRoutes(ctx: AppContext): Hono {
-  const app = new Hono();
+export function importRoutes(ctx: AppContext): Hono<AuthEnv> {
+  const app = new Hono<AuthEnv>();
+  // Parents and admins import into their own shelf (ADR 0010); checked before the upload is read.
+  app.use('/import/*', parentsOnly('import from Bookpine'));
   app.post('/import/bookpine/preview', csvLimit, async (c) =>
-    respond(c, bookpineReportSchema, await previewBookpine(ctx, await readCsv(c))),
+    respond(c, bookpineReportSchema, await previewBookpine(ctx, requestScope(c), await readCsv(c))),
   );
   app.post('/import/bookpine', csvLimit, async (c) =>
-    respond(c, bookpineReportSchema, await importBookpine(ctx, await readCsv(c))),
+    respond(c, bookpineReportSchema, await importBookpine(ctx, requestScope(c), await readCsv(c))),
   );
   return app;
 }

@@ -1,5 +1,6 @@
 /**
- * Tags (SPEC §4): names are unique case-insensitively among live tags.
+ * Tags (SPEC §4): each member's own; names are unique case-insensitively
+ * among the member's live tags.
  */
 import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
@@ -7,19 +8,39 @@ import type { Tag, TagUpdate, tagCreateSchema } from '../../shared/index.ts';
 import { nowIso, type AppContext } from '../context.ts';
 import { transaction } from '../db/database.ts';
 import { conflict, notFound } from '../http/errors.ts';
-import { findTag, findTagByName, listTags, softDeleteTag } from '../repositories/records.ts';
-import { findById, insertRow, tagsTable, upsertRow } from '../repositories/tables.ts';
+import {
+  findTag,
+  findTagByName,
+  listTags as listMemberTags,
+  softDeleteTag,
+} from '../repositories/records.ts';
+import { findById, insertRow, tagsTable, upsertRow, type Owned } from '../repositories/tables.ts';
+import type { MemberScope } from './scope.ts';
 
-export { listTags };
-
-function assertUniqueName(ctx: AppContext, name: string, exceptId?: string): void {
-  if (findTagByName(ctx.db, name, exceptId)) throw conflict(`A tag named "${name}" already exists`);
+export function listTags(ctx: AppContext, scope: MemberScope): Tag[] {
+  return listMemberTags(ctx.db, scope.member.id);
 }
 
-export function createTag(ctx: AppContext, input: z.output<typeof tagCreateSchema>): Tag {
+function assertUniqueName(
+  ctx: AppContext,
+  scope: MemberScope,
+  name: string,
+  exceptId?: string,
+): void {
+  if (findTagByName(ctx.db, scope.member.id, name, exceptId)) {
+    throw conflict(`A tag named "${name}" already exists`);
+  }
+}
+
+export function createTag(
+  ctx: AppContext,
+  scope: MemberScope,
+  input: z.output<typeof tagCreateSchema>,
+): Tag {
   const at = nowIso(ctx);
-  const tag: Tag = {
+  const tag: Owned<Tag> = {
     id: input.id ?? randomUUID(),
+    memberId: scope.member.id,
     name: input.name,
     colour: input.colour,
     createdAt: at,
@@ -29,30 +50,30 @@ export function createTag(ctx: AppContext, input: z.output<typeof tagCreateSchem
   transaction(ctx.db, () => {
     if (findById(ctx.db, tagsTable, tag.id))
       throw conflict(`A record with id ${tag.id} already exists`);
-    assertUniqueName(ctx, tag.name);
+    assertUniqueName(ctx, scope, tag.name);
     insertRow(ctx.db, tagsTable, tag);
   });
   return tag;
 }
 
-function requireTag(ctx: AppContext, id: string): Tag {
-  const tag = findTag(ctx.db, id);
+function requireTag(ctx: AppContext, scope: MemberScope, id: string): Owned<Tag> {
+  const tag = findTag(ctx.db, scope.member.id, id);
   if (!tag) throw notFound('Tag');
   return tag;
 }
 
-export function updateTag(ctx: AppContext, id: string, patch: TagUpdate): Tag {
-  const tag: Tag = { ...requireTag(ctx, id), ...patch, updatedAt: nowIso(ctx) };
+export function updateTag(ctx: AppContext, scope: MemberScope, id: string, patch: TagUpdate): Tag {
+  const tag: Owned<Tag> = { ...requireTag(ctx, scope, id), ...patch, updatedAt: nowIso(ctx) };
   transaction(ctx.db, () => {
-    assertUniqueName(ctx, tag.name, id);
+    assertUniqueName(ctx, scope, tag.name, id);
     upsertRow(ctx.db, tagsTable, tag);
   });
   return tag;
 }
 
 /** Soft-deletes the tag and unlinks it from every book. */
-export function deleteTag(ctx: AppContext, id: string): void {
-  requireTag(ctx, id);
+export function deleteTag(ctx: AppContext, scope: MemberScope, id: string): void {
+  requireTag(ctx, scope, id);
   transaction(ctx.db, () => {
     softDeleteTag(ctx.db, id, nowIso(ctx));
   });

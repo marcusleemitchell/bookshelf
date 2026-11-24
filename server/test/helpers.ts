@@ -2,8 +2,10 @@
  * Test harness: a fresh SQLite database in an OS temp directory (never the
  * real data dir), a fixed clock, a fetch mock that fails on any unexpected
  * request (no network in tests), a captured logger and, unless disabled, a
- * signed-in owner whose session cookie `request()` sends.
+ * signed-in owner whose session cookie `request()` sends. `addMember()`
+ * adds more family members, each signed in on their own session.
  */
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +17,14 @@ import { openDatabase } from '../db/database.ts';
 import { migrate } from '../db/migrate.ts';
 import { SESSION_COOKIE } from '../http/auth.ts';
 import { createLogger } from '../logger.ts';
-import { findOwner, insertAuthSession, type MemberRow } from '../repositories/members.ts';
+import type { MemberRole } from '../../shared/index.ts';
+import { run } from '../db/database.ts';
+import {
+  findMember,
+  findOwner,
+  insertAuthSession,
+  type MemberRow,
+} from '../repositories/members.ts';
 import { hashToken, SESSION_TTL_MS } from '../services/auth.ts';
 
 export interface FetchCall {
@@ -111,6 +120,28 @@ export interface ApiResponse<T = unknown> {
   headers: Headers;
 }
 
+export type RequestFn = <T = unknown>(
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+) => Promise<ApiResponse<T>>;
+
+/** A family member added by {@link TestEnv.addMember}, signed in on their own session. */
+export interface TestMember {
+  member: MemberRow;
+  /** Headers carrying the member's session cookie, for `app.request`. */
+  headers: Record<string, string>;
+  /** Like {@link TestEnv.request}, signed in as this member. */
+  request: RequestFn;
+}
+
+export interface AddMemberOptions {
+  name: string;
+  role?: MemberRole;
+  admin?: boolean;
+}
+
 export interface TestEnv {
   ctx: AppContext;
   app: Hono;
@@ -125,12 +156,12 @@ export interface TestEnv {
   cookie: string | null;
   /** Headers carrying {@link cookie}, for tests that call `app.request` directly. */
   authHeaders(): Record<string, string>;
-  request<T = unknown>(
-    method: string,
-    path: string,
-    body?: unknown,
-    headers?: Record<string, string>,
-  ): Promise<ApiResponse<T>>;
+  request: RequestFn;
+  /**
+   * Adds a live member (created after the owner, without a PIN) and signs
+   * them in by inserting a session directly (no PIN hashing).
+   */
+  addMember(options: AddMemberOptions): TestMember;
   cleanup(): void;
 }
 
@@ -178,19 +209,46 @@ export function createTestEnv(options: TestEnvOptions = {}): TestEnv {
   const app = createApp(ctx, options.appOptions ?? {});
   const owner = findOwner(db);
   if (!owner) throw new Error('Migration 0005 did not create the owner');
-  let cookie: string | null = null;
-  if (options.signedIn ?? true) {
-    const token = 'test-session-token';
+  /** Signs `memberId` in with a session row inserted directly; returns the cookie header. */
+  const signIn = (memberId: string, token: string): string => {
     const at = new Date(nowMs);
     insertAuthSession(db, {
       tokenHash: hashToken(token),
-      memberId: owner.id,
+      memberId,
       createdAt: at.toISOString(),
       renewedAt: at.toISOString(),
       expiresAt: new Date(at.getTime() + SESSION_TTL_MS).toISOString(),
     });
-    cookie = `${SESSION_COOKIE}=${token}`;
-  }
+    return `${SESSION_COOKIE}=${token}`;
+  };
+  const cookie = (options.signedIn ?? true) ? signIn(owner.id, 'test-session-token') : null;
+
+  const send = async <T>(
+    sent: Record<string, string>,
+    method: string,
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<ApiResponse<T>> => {
+    const init: RequestInit = { method };
+    if (body !== undefined) {
+      init.body = typeof body === 'string' ? body : JSON.stringify(body);
+      sent['content-type'] = 'application/json';
+    }
+    init.headers = { ...sent, ...headers };
+    const response = await app.request(path, init);
+    const text = await response.text();
+    let parsed: unknown = null;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text;
+      }
+    }
+    return { status: response.status, body: parsed as T, headers: response.headers };
+  };
+  let added = 0;
   const env: TestEnv = {
     ctx,
     app,
@@ -214,30 +272,26 @@ export function createTestEnv(options: TestEnvOptions = {}): TestEnv {
       if (env.cookie) headers['cookie'] = env.cookie;
       return headers;
     },
-    async request<T>(
-      method: string,
-      path: string,
-      body?: unknown,
-      headers: Record<string, string> = {},
-    ): Promise<ApiResponse<T>> {
-      const init: RequestInit = { method };
-      const sent = env.authHeaders();
-      if (body !== undefined) {
-        init.body = typeof body === 'string' ? body : JSON.stringify(body);
-        sent['content-type'] = 'application/json';
-      }
-      init.headers = { ...sent, ...headers };
-      const response = await app.request(path, init);
-      const text = await response.text();
-      let parsed: unknown = null;
-      if (text) {
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          parsed = text;
-        }
-      }
-      return { status: response.status, body: parsed as T, headers: response.headers };
+    request: (method, path, body, headers) => send(env.authHeaders(), method, path, body, headers),
+    addMember({ name, role = 'parent', admin = false }) {
+      added += 1;
+      const id = randomUUID();
+      // Created after the owner (whose created_at is the real migration time), so the owner stays the owner.
+      const at = new Date(Date.parse(owner.createdAt) + added * 1000).toISOString();
+      run(
+        db,
+        `INSERT INTO members (id, name, role, is_admin, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [id, name, role, admin ? 1 : 0, at, at],
+      );
+      const memberCookie = signIn(id, `test-session-${id}`);
+      const member = findMember(db, id) as MemberRow;
+      return {
+        member,
+        headers: { cookie: memberCookie },
+        request: (method, path, body, headers) =>
+          send({ cookie: memberCookie }, method, path, body, headers),
+      };
     },
     cleanup() {
       if (db.isOpen) db.close();

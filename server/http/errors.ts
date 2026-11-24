@@ -3,7 +3,7 @@
  */
 import type { ErrorCode } from '../../shared/index.ts';
 
-export type ErrorStatus = 400 | 401 | 404 | 409 | 429 | 500 | 502;
+export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 429 | 500 | 502;
 
 export class AppError extends Error {
   override readonly name = 'AppError';
@@ -25,6 +25,11 @@ export function validationError(message: string, details?: unknown): AppError {
 
 export function unauthorised(message: string): AppError {
   return new AppError(401, 'unauthorised', message);
+}
+
+/** The signed-in member may not do this (ADR 0010 permissions). */
+export function forbidden(message: string): AppError {
+  return new AppError(403, 'forbidden', message);
 }
 
 export function notFound(what: string): AppError {

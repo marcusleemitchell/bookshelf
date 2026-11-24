@@ -1,12 +1,21 @@
 /**
- * Offline outbox replay (SPEC §5, ADR 0004).
+ * Offline outbox replay (SPEC §5, ADR 0004, ADR 0010).
  *
- * - Ops are applied in order, each in its own transaction.
+ * - Ops are applied in order, each in its own transaction, for the signed-in
+ *   member (never a member named in the payload).
  * - Idempotent by `opId`: applied/stale ops are recorded in `sync_ops`;
  *   replaying one returns the original status with `duplicate: true`.
  * - Last-write-wins per row: an op is ignored (`stale`) when the stored row's
  *   `updated_at` is newer than the op's `clientUpdatedAt`; otherwise the row
- *   is replaced and stamped with `clientUpdatedAt`.
+ *   is replaced and stamped with `clientUpdatedAt`. For books, the row is the
+ *   member's shelf entry: a `book` upsert creates the catalogue book when it
+ *   is new and otherwise only applies status, rating and tags to the
+ *   member's shelf, so last-write-wins only ever resolves one person's edits.
+ * - Personal rows (reads, sessions, notes, tags, goals, timer) must be the
+ *   member's: another member's row id is a `forbidden` op error, and a book
+ *   that was never on the member's shelf is `not_found`. Changing an existing
+ *   format needs a parent or an admin (`forbidden` for a child); adding one
+ *   does not.
  * - Sync is row replication: REST side effects (e.g. opening a read when a
  *   session is logged) are not repeated, so clients send every row they
  *   changed. Session percents are still derived server-side.
@@ -17,7 +26,8 @@ import {
   formatLengthError,
   syncDeletePayloadSchema,
   syncPayloadSchemas,
-  type BookRecord,
+  type BookFormat,
+  type CatalogueBook,
   type SyncEntity,
   type SyncOp,
   type SyncOpResult,
@@ -25,13 +35,20 @@ import {
 } from '../../shared/index.ts';
 import { nowIso, type AppContext } from '../context.ts';
 import { isConstraintError, run, transaction } from '../db/database.ts';
-import { AppError, conflict, validationError } from '../http/errors.ts';
-import { replaceBookTags, saveBook, softDeleteBookCascade } from '../repositories/books.ts';
+import { AppError, conflict, forbidden, validationError } from '../http/errors.ts';
+import {
+  findCatalogueBook,
+  findShelfEntry,
+  removeFromShelf,
+  replaceBookTags,
+  saveCatalogueBook,
+  saveShelfEntry,
+} from '../repositories/books.ts';
 import {
   deleteTimer,
+  findGoalByKindYear,
   findTag,
   findTagByName,
-  findGoalByKindYear,
   findTimer,
   recomputeFormatSessions,
   saveTimer,
@@ -40,30 +57,36 @@ import {
 } from '../repositories/records.ts';
 import { findSyncOp, recordSyncOp } from '../repositories/state.ts';
 import {
-  booksTable,
   findById,
   formatsTable,
   goalsTable,
   notesTable,
+  personalRowMeta,
   readsTable,
-  sessionsTable,
   rowMeta,
+  sessionsTable,
   tagsTable,
+  timerTable,
   upsertRow,
+  type Owned,
+  type PersonalTableName,
   type Table,
-  type TableName,
 } from '../repositories/tables.ts';
-import { cacheCover, clearCover } from './covers.ts';
 import { completeIsbns } from './library.ts';
+import { canEditCatalogue, type MemberScope } from './scope.ts';
+import { cacheCover } from './covers.ts';
 import { derivePercents, validateSessionShape } from './sessions.ts';
 
 type Status = 'applied' | 'stale';
 
 interface OpContext {
   ctx: AppContext;
+  scope: MemberScope;
+  /** The member whose data the op writes. */
+  memberId: string;
   at: string;
-  /** Books whose cover must be (re)cached after commit; null URL = clear. */
-  coverJobs: Map<string, string | null>;
+  /** New catalogue books whose cover must be cached after commit. */
+  coverJobs: Map<string, string>;
 }
 
 function parsePayload<S extends z.ZodType>(schema: S, payload: unknown): z.output<S> {
@@ -80,10 +103,41 @@ function isStale(existing: { updatedAt: string } | undefined, at: string): boole
   return existing !== undefined && existing.updatedAt > at;
 }
 
+function unknown(label: string, id: string): AppError {
+  return new AppError(404, 'not_found', `Unknown ${label} ${id}`);
+}
+
+function notYours(label: string, id: string): AppError {
+  return forbidden(`The ${label} ${id} belongs to another member`);
+}
+
 function requireRow<T>(op: OpContext, table: Table<T>, id: string, label: string): T {
   const row = findById(op.ctx.db, table, id);
-  if (!row) throw new AppError(404, 'not_found', `Unknown ${label} ${id}`);
+  if (!row) throw unknown(label, id);
   return row;
+}
+
+/**
+ * The member's row with `id` (any state), or undefined when no such row
+ * exists. Another member's row is `forbidden`.
+ */
+function ownRow<T>(
+  op: OpContext,
+  table: Table<Owned<T>>,
+  id: string,
+  label: string,
+): Owned<T> | undefined {
+  const row = findById(op.ctx.db, table, id);
+  if (row && row.memberId !== op.memberId) throw notYours(label, id);
+  return row;
+}
+
+/**
+ * Checks that the book has been on the member's shelf (a shelf entry, live
+ * or removed, like a deleted book row before family profiles).
+ */
+function requireShelf(op: OpContext, bookId: string): void {
+  if (!findShelfEntry(op.ctx.db, op.memberId, bookId)) throw unknown('bookId', bookId);
 }
 
 function syncTimestamps(existing: { createdAt: string } | undefined, at: string) {
@@ -96,40 +150,68 @@ function assertSameBook(existing: { bookId: string } | undefined, bookId: string
   }
 }
 
+const FORMAT_FIELDS = ['bookId', 'format', 'pageCount', 'audioDurationSeconds', 'isbn'] as const;
+
+function sameFormat(
+  existing: BookFormat,
+  incoming: Pick<BookFormat, (typeof FORMAT_FIELDS)[number]>,
+) {
+  return (
+    existing.deletedAt === null && FORMAT_FIELDS.every((key) => existing[key] === incoming[key])
+  );
+}
+
 const upserts: Record<SyncEntity, (op: OpContext, payload: unknown) => Status> = {
   book(op, payload) {
     const p = parsePayload(syncPayloadSchemas.book, payload);
     const { db } = op.ctx;
-    const existing = findById(db, booksTable, p.id);
-    if (isStale(existing, op.at)) return 'stale';
-    const coverChanged = existing?.coverUrl !== p.coverUrl;
-    const { tagIds, ...fields } = p;
-    const record: BookRecord = {
-      ...fields,
-      ...completeIsbns(p.isbn10, p.isbn13),
-      coverPath: coverChanged ? null : existing.coverPath,
-      ...syncTimestamps(existing, op.at),
-    };
-    saveBook(db, record);
+    const entry = findShelfEntry(db, op.memberId, p.id);
+    if (isStale(entry, op.at)) return 'stale';
+    const { tagIds, status, rating, ...fields } = p;
+    const catalogue = findCatalogueBook(db, p.id);
+    if (!catalogue) {
+      const record: CatalogueBook = {
+        ...fields,
+        ...completeIsbns(p.isbn10, p.isbn13),
+        coverPath: null,
+        ...syncTimestamps(undefined, op.at),
+      };
+      saveCatalogueBook(db, record);
+      if (record.coverUrl) op.coverJobs.set(p.id, record.coverUrl);
+    } else if (catalogue.deletedAt !== null) {
+      // Back on a shelf: the catalogue book is live again (its fields are kept).
+      saveCatalogueBook(db, { ...catalogue, deletedAt: null, updatedAt: op.at });
+    }
+    saveShelfEntry(db, {
+      memberId: op.memberId,
+      bookId: p.id,
+      status,
+      rating,
+      ...syncTimestamps(entry, op.at),
+    });
     if (tagIds) {
       replaceBookTags(
         db,
+        op.memberId,
         p.id,
-        tagIds.filter((id) => findTag(db, id)),
+        tagIds.filter((id) => findTag(db, op.memberId, id)),
         op.at,
       );
     }
-    if (coverChanged) op.coverJobs.set(p.id, p.coverUrl);
     return 'applied';
   },
 
   format(op, payload) {
     const p = parsePayload(syncPayloadSchemas.format, payload);
     const { db } = op.ctx;
-    requireRow(op, booksTable, p.bookId, 'bookId');
+    requireShelf(op, p.bookId);
     const existing = findById(db, formatsTable, p.id);
     if (isStale(existing, op.at)) return 'stale';
     assertSameBook(existing, p.bookId, 'format');
+    if (existing && !canEditCatalogue(op.scope)) {
+      if (sameFormat(existing, p)) return 'applied';
+      throw forbidden('Only a parent can change a format');
+    }
     const lengthError = formatLengthError(p);
     if (lengthError) throw validationError(lengthError);
     const format = { ...p, ...syncTimestamps(existing, op.at) };
@@ -146,25 +228,31 @@ const upserts: Record<SyncEntity, (op: OpContext, payload: unknown) => Status> =
 
   read(op, payload) {
     const p = parsePayload(syncPayloadSchemas.read, payload);
-    requireRow(op, booksTable, p.bookId, 'bookId');
-    const existing = findById(op.ctx.db, readsTable, p.id);
+    requireShelf(op, p.bookId);
+    const existing = ownRow(op, readsTable, p.id, 'read');
     if (isStale(existing, op.at)) return 'stale';
     assertSameBook(existing, p.bookId, 'read');
-    upsertRow(op.ctx.db, readsTable, { ...p, ...syncTimestamps(existing, op.at) });
+    upsertRow(op.ctx.db, readsTable, {
+      ...p,
+      memberId: op.memberId,
+      ...syncTimestamps(existing, op.at),
+    });
     return 'applied';
   },
 
   session(op, payload) {
     const p = parsePayload(syncPayloadSchemas.session, payload);
-    requireRow(op, booksTable, p.bookId, 'bookId');
-    const read = requireRow(op, readsTable, p.readId, 'readId');
+    requireShelf(op, p.bookId);
+    const read = ownRow(op, readsTable, p.readId, 'readId');
+    if (!read) throw unknown('readId', p.readId);
     const format = requireRow(op, formatsTable, p.formatId, 'formatId');
     if (read.bookId !== p.bookId) throw validationError('readId does not belong to this book');
     validateSessionShape(p, format);
-    const existing = findById(op.ctx.db, sessionsTable, p.id);
+    const existing = ownRow(op, sessionsTable, p.id, 'session');
     if (isStale(existing, op.at)) return 'stale';
     upsertRow(op.ctx.db, sessionsTable, {
       ...p,
+      memberId: op.memberId,
       source: p.source ?? existing?.source ?? 'app',
       ...derivePercents(format, p.progressUnit, p.startValue, p.endValue),
       ...syncTimestamps(existing, op.at),
@@ -174,21 +262,29 @@ const upserts: Record<SyncEntity, (op: OpContext, payload: unknown) => Status> =
 
   tag(op, payload) {
     const p = parsePayload(syncPayloadSchemas.tag, payload);
-    const existing = findById(op.ctx.db, tagsTable, p.id);
+    const existing = ownRow(op, tagsTable, p.id, 'tag');
     if (isStale(existing, op.at)) return 'stale';
-    if (findTagByName(op.ctx.db, p.name, p.id))
+    if (findTagByName(op.ctx.db, op.memberId, p.name, p.id))
       throw conflict(`A tag named "${p.name}" already exists`);
-    upsertRow(op.ctx.db, tagsTable, { ...p, ...syncTimestamps(existing, op.at) });
+    upsertRow(op.ctx.db, tagsTable, {
+      ...p,
+      memberId: op.memberId,
+      ...syncTimestamps(existing, op.at),
+    });
     return 'applied';
   },
 
   note(op, payload) {
     const p = parsePayload(syncPayloadSchemas.note, payload);
-    requireRow(op, booksTable, p.bookId, 'bookId');
-    const existing = findById(op.ctx.db, notesTable, p.id);
+    requireShelf(op, p.bookId);
+    const existing = ownRow(op, notesTable, p.id, 'note');
     if (isStale(existing, op.at)) return 'stale';
     assertSameBook(existing, p.bookId, 'note');
-    upsertRow(op.ctx.db, notesTable, { ...p, ...syncTimestamps(existing, op.at) });
+    upsertRow(op.ctx.db, notesTable, {
+      ...p,
+      memberId: op.memberId,
+      ...syncTimestamps(existing, op.at),
+    });
     return 'applied';
   },
 
@@ -199,24 +295,30 @@ const upserts: Record<SyncEntity, (op: OpContext, payload: unknown) => Status> =
         'year is required for per-year goals and must be null for minutes_per_day',
       );
     }
-    const existing = findById(op.ctx.db, goalsTable, p.id);
+    const existing = ownRow(op, goalsTable, p.id, 'goal');
     if (isStale(existing, op.at)) return 'stale';
-    if (findGoalByKindYear(op.ctx.db, p.kind, p.year, p.id)) {
+    if (findGoalByKindYear(op.ctx.db, op.memberId, p.kind, p.year, p.id)) {
       throw conflict(`Another ${p.kind} goal already exists for that period`);
     }
-    upsertRow(op.ctx.db, goalsTable, { ...p, ...syncTimestamps(existing, op.at) });
+    upsertRow(op.ctx.db, goalsTable, {
+      ...p,
+      memberId: op.memberId,
+      ...syncTimestamps(existing, op.at),
+    });
     return 'applied';
   },
 
   timer(op, payload) {
     const p = parsePayload(syncPayloadSchemas.timer, payload);
-    requireRow(op, booksTable, p.bookId, 'bookId');
+    requireShelf(op, p.bookId);
     const format = requireRow(op, formatsTable, p.formatId, 'formatId');
     if (format.bookId !== p.bookId) throw validationError('formatId does not belong to this book');
-    const existing = findTimer(op.ctx.db);
+    ownRow(op, timerTable, p.id, 'timer');
+    const existing = findTimer(op.ctx.db, op.memberId);
     if (isStale(existing, op.at)) return 'stale';
     saveTimer(op.ctx.db, {
       ...p,
+      memberId: op.memberId,
       createdAt: existing?.id === p.id ? existing.createdAt : op.at,
       updatedAt: op.at,
     });
@@ -224,9 +326,7 @@ const upserts: Record<SyncEntity, (op: OpContext, payload: unknown) => Status> =
   },
 };
 
-const deleteTables: Record<Exclude<SyncEntity, 'timer'>, TableName> = {
-  book: 'books',
-  format: 'book_formats',
+const personalTables: Record<'read' | 'session' | 'tag' | 'note' | 'goal', PersonalTableName> = {
   read: 'reads',
   session: 'sessions',
   tag: 'tags',
@@ -238,32 +338,56 @@ function applyDelete(op: OpContext, entity: SyncEntity, payload: unknown): Statu
   const { id } = parsePayload(syncDeletePayloadSchema, payload);
   const { db } = op.ctx;
   if (entity === 'timer') {
-    const timer = findTimer(db);
+    ownRow(op, timerTable, id, 'timer');
+    const timer = findTimer(db, op.memberId);
     if (timer?.id !== id) return 'applied';
     if (isStale(timer, op.at)) return 'stale';
-    deleteTimer(db);
+    deleteTimer(db, op.memberId);
     return 'applied';
   }
-  const table = deleteTables[entity];
-  const existing = rowMeta(db, table, id);
+  if (entity === 'book') {
+    // Removes the book from the member's shelf (the catalogue goes with the last shelf).
+    const entry = findShelfEntry(db, op.memberId, id);
+    if (!entry || entry.deletedAt !== null) return 'applied';
+    if (isStale(entry, op.at)) return 'stale';
+    removeFromShelf(db, op.memberId, id, op.at);
+    return 'applied';
+  }
+  if (entity === 'format') {
+    const existing = rowMeta(db, 'book_formats', id);
+    if (!existing || existing.deletedAt !== null) return 'applied';
+    if (!canEditCatalogue(op.scope)) throw forbidden('Only a parent can delete a format');
+    if (isStale(existing, op.at)) return 'stale';
+    softDelete(db, 'book_formats', id, op.at);
+    run(db, 'DELETE FROM active_timer WHERE format_id = ?', [id]);
+    return 'applied';
+  }
+  const table = personalTables[entity];
+  const existing = personalRowMeta(db, table, id);
+  if (existing && existing.memberId !== op.memberId) throw notYours(entity, id);
   if (!existing || existing.deletedAt !== null) return 'applied';
   if (isStale(existing, op.at)) return 'stale';
-  if (table === 'books') {
-    softDeleteBookCascade(db, id, op.at);
-  } else if (table === 'tags') {
-    softDeleteTag(db, id, op.at);
-  } else {
-    softDelete(db, table, id, op.at);
-    if (table === 'book_formats') run(db, 'DELETE FROM active_timer WHERE format_id = ?', [id]);
-  }
+  if (table === 'tags') softDeleteTag(db, id, op.at);
+  else softDelete(db, table, id, op.at);
   return 'applied';
 }
 
-function processOp(ctx: AppContext, op: SyncOp, coverJobs: OpContext['coverJobs']): SyncOpResult {
+function processOp(
+  ctx: AppContext,
+  scope: MemberScope,
+  op: SyncOp,
+  coverJobs: OpContext['coverJobs'],
+): SyncOpResult {
   const prior = findSyncOp(ctx.db, op.opId);
   if (prior) return { opId: op.opId, status: prior.status, duplicate: true };
-  const pendingCovers = new Map<string, string | null>();
-  const opContext: OpContext = { ctx, at: op.clientUpdatedAt, coverJobs: pendingCovers };
+  const pendingCovers = new Map<string, string>();
+  const opContext: OpContext = {
+    ctx,
+    scope,
+    memberId: scope.member.id,
+    at: op.clientUpdatedAt,
+    coverJobs: pendingCovers,
+  };
   try {
     const status = transaction(ctx.db, () => {
       const result =
@@ -312,13 +436,14 @@ function processOp(ctx: AppContext, op: SyncOp, coverJobs: OpContext['coverJobs'
   }
 }
 
-/** `POST /api/sync`. */
-export async function processSync(ctx: AppContext, ops: readonly SyncOp[]): Promise<SyncResponse> {
-  const coverJobs = new Map<string, string | null>();
-  const results = ops.map((op) => processOp(ctx, op, coverJobs));
-  for (const [bookId, url] of coverJobs) {
-    if (url) await cacheCover(ctx, bookId, url);
-    else clearCover(ctx, bookId);
-  }
+/** `POST /api/sync`: applies the ops for the scope's member. */
+export async function processSync(
+  ctx: AppContext,
+  scope: MemberScope,
+  ops: readonly SyncOp[],
+): Promise<SyncResponse> {
+  const coverJobs = new Map<string, string>();
+  const results = ops.map((op) => processOp(ctx, scope, op, coverJobs));
+  for (const [bookId, url] of coverJobs) await cacheCover(ctx, bookId, url);
   return { results };
 }

@@ -13,17 +13,22 @@
  * values the import last wrote. On re-import a field is only updated while
  * it still holds that value (otherwise the user edited it and it is kept);
  * rows the user deleted are not re-created.
+ *
+ * An import is always into one member's shelf (ADR 0010): their reads,
+ * sessions, notes, tags and provenance. A book already in the family's
+ * catalogue (same ISBN) is reused and put on the member's shelf instead of
+ * being added again.
  */
 import { randomUUID } from 'node:crypto';
 import {
+  normaliseIsbn,
   type Book,
   type BookCandidate,
   type BookFormat,
   type BookNote,
   type BookpineReport,
-  type BookRecord,
+  type CatalogueBook,
   type FormatType,
-  type ImportLink,
   type ImportLinkEntity,
   type ImportWarning,
   type Read,
@@ -40,7 +45,16 @@ import {
   type ImportPlan,
   type PlannedBook,
 } from '../import/plan.ts';
-import { findBook, listBooks, replaceBookTags, saveBook } from '../repositories/books.ts';
+import {
+  findBook,
+  findCatalogueBook,
+  findCatalogueBookByIsbn13,
+  findShelfEntry,
+  listBooks,
+  replaceBookTags,
+  saveCatalogueBook,
+  saveShelfEntry,
+} from '../repositories/books.ts';
 import { findImportLink, linksToLocal, saveImportLink } from '../repositories/imports.ts';
 import {
   bookFormats,
@@ -50,7 +64,9 @@ import {
   recomputeFormatSessions,
 } from '../repositories/records.ts';
 import {
+  booksTable,
   findById,
+  findOwned,
   formatsTable,
   insertRow,
   notesTable,
@@ -58,10 +74,12 @@ import {
   sessionsTable,
   tagsTable,
   upsertRow,
+  type Owned,
 } from '../repositories/tables.ts';
 import { writeSnapshot } from './backup.ts';
 import { cacheCover } from './covers.ts';
-import { completeIsbns } from './library.ts';
+import { completeIsbns, updateShelfEntry } from './library.ts';
+import type { MemberScope } from './scope.ts';
 import { lookupIsbn, searchBooks } from './lookup.ts';
 import { derivePercents } from './sessions.ts';
 
@@ -90,8 +108,13 @@ export function readBookpinePlan(ctx: AppContext, csv: string): ImportPlan {
 
 interface Target {
   planned: PlannedBook;
-  /** The existing book (live or deleted), or null to create one. */
+  /** The existing book on the member's shelf (live or removed), or null. */
   book: Book | null;
+  /**
+   * A live catalogue book with the same ISBN that is not on the member's
+   * shelf: it is put on their shelf instead of creating another book.
+   */
+  catalogue: CatalogueBook | null;
   /** True when an existing book that was never imported was matched by ISBN or title. */
   matched: boolean;
   /** Values the import last wrote to the book (empty when new or matched). */
@@ -104,10 +127,19 @@ function titleAuthorKey(title: string, authors: readonly string[]): string {
   return `${titleKeys(title).main}\u0000${normaliseKey(authors[0] ?? '')}`;
 }
 
-/** Finds which existing book (if any) each planned book is. Read-only. */
-function resolveTargets(ctx: AppContext, plan: ImportPlan, warnings: ImportWarning[]): Target[] {
+/**
+ * Finds which existing book (if any) each planned book is: one the member
+ * imported before, else one on their shelf with the same ISBN or title and
+ * author, else a catalogue book with the same ISBN. Read-only.
+ */
+function resolveTargets(
+  ctx: AppContext,
+  memberId: string,
+  plan: ImportPlan,
+  warnings: ImportWarning[],
+): Target[] {
   const { db } = ctx;
-  const live = listBooks(db);
+  const live = listBooks(db, memberId);
   const byIsbn = new Map<string, Book>();
   const byTitle = new Map<string, Book>();
   for (const book of live) {
@@ -122,8 +154,8 @@ function resolveTargets(ctx: AppContext, plan: ImportPlan, warnings: ImportWarni
   const claimed = new Set<string>();
   return plan.books.map((planned): Target => {
     const links = planned.slugs
-      .map((slug) => findImportLink(db, SOURCE, 'book', slug))
-      .filter((link): link is ImportLink => link !== undefined);
+      .map((slug) => findImportLink(db, memberId, SOURCE, 'book', slug))
+      .filter((link) => link !== undefined);
     const linkedIds = [...new Set(links.map((link) => link.localId))];
     if (linkedIds.length > 1) {
       warnings.push({
@@ -132,7 +164,8 @@ function resolveTargets(ctx: AppContext, plan: ImportPlan, warnings: ImportWarni
       });
     }
     const first = links[0];
-    let book = first ? (findBook(db, first.localId, true) ?? null) : null;
+    let book = first ? (findBook(db, memberId, first.localId, true) ?? null) : null;
+    let catalogue: CatalogueBook | null = null;
     let matched = false;
     if (!book) {
       book =
@@ -142,17 +175,34 @@ function resolveTargets(ctx: AppContext, plan: ImportPlan, warnings: ImportWarni
         ) ??
         null;
       if (book) {
-        matched = linksToLocal(db, 'book', book.id).length === 0;
+        matched = linksToLocal(db, memberId, 'book', book.id).length === 0;
         warnings.push({
           slug: planned.anchor,
           message: `Linked to “${book.title}”, already in your library, instead of adding it again`,
         });
       }
     }
-    if (book) claimed.add(book.id);
-    const linkedSlugs = book ? linksToLocal(db, 'book', book.id).map((l) => l.externalId) : [];
+    if (!book) {
+      catalogue =
+        planned.isbns
+          .map((isbn) => normaliseIsbn(isbn)?.isbn13)
+          .map((isbn13) => (isbn13 ? findCatalogueBookByIsbn13(db, isbn13) : undefined))
+          .find((b) => b && !claimed.has(b.id)) ?? null;
+      if (catalogue) {
+        matched = true;
+        warnings.push({
+          slug: planned.anchor,
+          message: `Added “${catalogue.title}”, already in the family’s books, to your shelf instead of adding it again`,
+        });
+      }
+    }
+    const id = book?.id ?? catalogue?.id;
+    if (id) claimed.add(id);
+    const linkedSlugs = book
+      ? linksToLocal(db, memberId, 'book', book.id).map((l) => l.externalId)
+      : [];
     const anchor = linkedSlugs.length > 0 ? ([...linkedSlugs].sort()[0] as string) : planned.anchor;
-    return { planned, book, matched, base: first?.imported ?? {}, anchor };
+    return { planned, book, catalogue, matched, base: first?.imported ?? {}, anchor };
   });
 }
 
@@ -164,7 +214,7 @@ type Enrichment =
   | { status: 'failed'; message: string };
 
 function needsEnrichment(db: Db, target: Target): boolean {
-  const { book } = target;
+  const book = target.book ?? target.catalogue;
   if (!book) return true;
   if (book.deletedAt !== null) return false;
   const formatsMissingPages = bookFormats(db, book.id).some(
@@ -272,6 +322,8 @@ function merge3<T extends Record<string, unknown>>(
 
 interface ApplyContext {
   ctx: AppContext;
+  /** The member the import is for. */
+  memberId: string;
   at: string;
   report: BookpineReport;
 }
@@ -284,6 +336,7 @@ function link(
   imported: Record<string, unknown>,
 ): void {
   saveImportLink(apply.ctx.db, {
+    memberId: apply.memberId,
     source: SOURCE,
     entity,
     externalId,
@@ -325,14 +378,16 @@ function applyTags(
   base: unknown,
 ): boolean {
   const { db } = apply.ctx;
+  const { memberId } = apply;
   const previous = new Set(Array.isArray(base) ? (base as string[]) : []);
   const current = new Set(book.tagIds);
   const ids = [...book.tagIds];
   for (const name of names) {
-    let tag = findTagByName(db, name);
+    let tag = findTagByName(db, memberId, name);
     if (!tag) {
       tag = {
         id: randomUUID(),
+        memberId,
         name,
         colour: null,
         createdAt: apply.at,
@@ -347,8 +402,43 @@ function applyTags(
     if (!current.has(tag.id) && !previous.has(name)) ids.push(tag.id);
   }
   if (ids.length === book.tagIds.length) return false;
-  replaceBookTags(db, book.id, ids, apply.at);
+  replaceBookTags(db, memberId, book.id, ids, apply.at);
   return true;
+}
+
+/**
+ * Writes the member's view of an imported book back: catalogue fields to the
+ * shared book (only when they changed) and status and rating to their shelf
+ * entry, stamping both `at`.
+ */
+function saveImportedBook(db: Db, memberId: string, book: Book, at: string): void {
+  const catalogue = findCatalogueBook(db, book.id) as CatalogueBook;
+  const merged: CatalogueBook = { ...catalogue };
+  for (const key of booksTable.columns) {
+    if (key !== 'createdAt' && key !== 'updatedAt' && key !== 'deletedAt') {
+      Object.assign(merged, { [key]: book[key] });
+    }
+  }
+  if (JSON.stringify(merged) !== JSON.stringify(catalogue)) {
+    saveCatalogueBook(db, { ...merged, updatedAt: at });
+  }
+  updateShelfEntry(db, memberId, book.id, { status: book.status, rating: book.rating }, at);
+}
+
+/** Puts a catalogue book on the member's shelf (a new or revived shelf entry). */
+function shelve(apply: ApplyContext, bookId: string, planned: PlannedBook): void {
+  const { db } = apply.ctx;
+  const { at, memberId } = apply;
+  const entry = findShelfEntry(db, memberId, bookId);
+  saveShelfEntry(db, {
+    memberId,
+    bookId,
+    status: planned.status,
+    rating: planned.rating,
+    createdAt: entry && entry.deletedAt === null ? entry.createdAt : at,
+    updatedAt: at,
+    deletedAt: null,
+  });
 }
 
 function applyBook(
@@ -357,7 +447,7 @@ function applyBook(
   enrichment: Enrichment | undefined,
 ): Book | null {
   const { db } = apply.ctx;
-  const { report, at } = apply;
+  const { report, at, memberId } = apply;
   const { planned } = target;
   if (target.book?.deletedAt) {
     report.books.skipped += 1;
@@ -371,11 +461,17 @@ function applyBook(
   let book: Book;
   let base: Record<string, unknown>;
   let changed = false;
-  if (!target.book) {
+  let existing = target.book;
+  if (!existing && target.catalogue) {
+    shelve(apply, target.catalogue.id, planned);
+    existing = findBook(db, memberId, target.catalogue.id) ?? null;
+  }
+  if (!existing) {
     const found = enrichment?.status === 'found' ? enrichment.candidate : null;
-    const record: BookRecord = {
+    const { status, rating, ...fields } = bookFields(planned);
+    const record: CatalogueBook = {
       id: randomUUID(),
-      ...bookFields(planned),
+      ...fields,
       publisher: found?.publisher ?? null,
       synopsis: found?.synopsis ?? null,
       coverUrl: found?.coverUrl ?? null,
@@ -387,24 +483,33 @@ function applyBook(
       updatedAt: at,
       deletedAt: null,
     };
-    saveBook(db, record);
-    book = { ...record, tagIds: [] };
+    saveCatalogueBook(db, record);
+    saveShelfEntry(db, {
+      memberId,
+      bookId: record.id,
+      status,
+      rating,
+      createdAt: at,
+      updatedAt: at,
+      deletedAt: null,
+    });
+    book = { ...record, status, rating, tagIds: [] };
     base = Object.fromEntries(Object.entries(incoming).filter(([, v]) => v !== undefined));
   } else {
-    const merged = merge3(target.book, target.base, incoming, report);
+    const merged = merge3(existing, target.base, incoming, report);
     book = merged.row;
     base = merged.base;
     changed = merged.changed;
   }
   const tagsChanged = applyTags(apply, book, planned.tags, target.base['tags']);
   base['tags'] = planned.tags;
-  if (target.book && (changed || tagsChanged)) saveBook(db, { ...book, updatedAt: at });
-  if (!target.book) report.books.created += 1;
+  if (existing && (changed || tagsChanged)) saveImportedBook(db, memberId, book, at);
+  if (!existing) report.books.created += 1;
   else if (target.matched) report.books.matched += 1;
   else if (changed || tagsChanged) report.books.updated += 1;
   else report.books.unchanged += 1;
   for (const slug of planned.slugs) link(apply, 'book', slug, book.id, base);
-  return findBook(db, book.id) ?? null;
+  return findBook(db, memberId, book.id) ?? null;
 }
 
 function liveRow<T extends { deletedAt: string | null }>(row: T | undefined): T | undefined {
@@ -423,7 +528,7 @@ function applyFormats(
   const enrichedPages = enrichment?.status === 'found' ? enrichment.candidate.pageCount : null;
   for (const planned of target.planned.formats) {
     const key = `${target.anchor}#format:${planned.type}`;
-    const existingLink = findImportLink(db, SOURCE, 'format', key);
+    const existingLink = findImportLink(db, apply.memberId, SOURCE, 'format', key);
     const linked = existingLink ? findById(db, formatsTable, existingLink.localId) : undefined;
     const sameType = bookFormats(db, book.id).find((f) => f.format === planned.type);
     const incoming = {
@@ -482,9 +587,9 @@ function applyReads(
   formats: Map<FormatType, BookFormat>,
 ): void {
   const { db } = apply.ctx;
-  const { report, at } = apply;
+  const { report, at, memberId } = apply;
   const plannedSessions = target.planned.reads.reduce((n, r) => n + r.sessions.length, 0);
-  if (target.matched && bookReads(db, book.id).length > 0) {
+  if (target.matched && bookReads(db, memberId, book.id).length > 0) {
     report.reads.skipped += target.planned.reads.length;
     report.sessions.skipped += plannedSessions;
     if (target.planned.reads.length > 0) {
@@ -498,8 +603,8 @@ function applyReads(
   }
   for (const plannedRead of target.planned.reads) {
     const readKey = `${target.anchor}#${plannedRead.suffix}`;
-    const readLink = findImportLink(db, SOURCE, 'read', readKey);
-    const linkedRead = readLink ? findById(db, readsTable, readLink.localId) : undefined;
+    const readLink = findImportLink(db, memberId, SOURCE, 'read', readKey);
+    const linkedRead = readLink ? findOwned(db, readsTable, memberId, readLink.localId) : undefined;
     if (linkedRead?.deletedAt) {
       report.reads.skipped += 1;
       report.sessions.skipped += plannedRead.sessions.length;
@@ -510,13 +615,14 @@ function applyReads(
       finishedAt: plannedRead.finishedAt,
       outcome: plannedRead.outcome,
     };
-    let read: Read;
+    let read: Owned<Read>;
     let readBase: Record<string, unknown>;
     if (!linkedRead) {
       read = {
         id: randomUUID(),
+        memberId,
         bookId: book.id,
-        number: nextReadNumber(db, book.id),
+        number: nextReadNumber(db, memberId, book.id),
         ...incoming,
         createdAt: at,
         updatedAt: at,
@@ -542,8 +648,10 @@ function applyReads(
     for (const plannedSession of plannedRead.sessions) {
       const format = formats.get(plannedSession.format);
       const key = `${target.anchor}#${plannedSession.suffix}`;
-      const sessionLink = findImportLink(db, SOURCE, 'session', key);
-      const linked = sessionLink ? findById(db, sessionsTable, sessionLink.localId) : undefined;
+      const sessionLink = findImportLink(db, memberId, SOURCE, 'session', key);
+      const linked = sessionLink
+        ? findOwned(db, sessionsTable, memberId, sessionLink.localId)
+        : undefined;
       if (!format || linked?.deletedAt) {
         report.sessions.skipped += 1;
         continue;
@@ -557,11 +665,12 @@ function applyReads(
         startValue: plannedSession.startValue,
         endValue: plannedSession.endValue,
       };
-      let session: Session;
+      let session: Owned<Session>;
       let sessionBase: Record<string, unknown>;
       if (!linked) {
         session = {
           id: randomUUID(),
+          memberId,
           bookId: book.id,
           ...incomingSession,
           durationSeconds: null,
@@ -610,21 +719,22 @@ function applyReads(
 
 function applyNotes(apply: ApplyContext, target: Target, book: Book): void {
   const { db } = apply.ctx;
-  const { report, at } = apply;
+  const { report, at, memberId } = apply;
   for (const plannedNote of target.planned.notes) {
     const key = `${target.anchor}#${plannedNote.suffix}`;
-    const noteLink = findImportLink(db, SOURCE, 'note', key);
-    const linked = noteLink ? findById(db, notesTable, noteLink.localId) : undefined;
+    const noteLink = findImportLink(db, memberId, SOURCE, 'note', key);
+    const linked = noteLink ? findOwned(db, notesTable, memberId, noteLink.localId) : undefined;
     if (linked?.deletedAt) {
       report.notes.skipped += 1;
       continue;
     }
     const incoming = { text: plannedNote.text };
-    let note: BookNote;
+    let note: Owned<BookNote>;
     let base: Record<string, unknown>;
     if (!linked) {
       note = {
         id: randomUUID(),
+        memberId,
         bookId: book.id,
         kind: 'note',
         text: plannedNote.text,
@@ -651,15 +761,16 @@ function applyNotes(apply: ApplyContext, target: Target, book: Book): void {
   }
 }
 
-/** Applies the plan to the database (the caller provides the transaction). */
+/** Applies the plan to the member's data (the caller provides the transaction). */
 function applyPlan(
   ctx: AppContext,
+  memberId: string,
   plan: ImportPlan,
   report: BookpineReport,
   enrichments: ReadonlyMap<PlannedBook, Enrichment>,
 ): Book[] {
-  const apply: ApplyContext = { ctx, at: nowIso(ctx), report };
-  const targets = resolveTargets(ctx, plan, report.warnings);
+  const apply: ApplyContext = { ctx, memberId, at: nowIso(ctx), report };
+  const targets = resolveTargets(ctx, memberId, plan, report.warnings);
   const touched: Book[] = [];
   for (const target of targets) {
     const enrichment = enrichments.get(target.planned);
@@ -692,13 +803,18 @@ async function guard<T>(ctx: AppContext, fn: () => Promise<T>): Promise<T> {
 }
 
 /** `POST /api/import/bookpine/preview`: what an import would do; writes nothing. */
-export function previewBookpine(ctx: AppContext, csv: string): Promise<BookpineReport> {
+export function previewBookpine(
+  ctx: AppContext,
+  scope: MemberScope,
+  csv: string,
+): Promise<BookpineReport> {
+  const memberId = scope.member.id;
   return guard(ctx, () => {
     const plan = readBookpinePlan(ctx, csv);
     const report = blankReport(plan, true);
-    const lookups = resolveTargets(ctx, plan, []);
+    const lookups = resolveTargets(ctx, memberId, plan, []);
     report.enrichment.pending = lookups.filter((target) => needsEnrichment(ctx.db, target)).length;
-    rollbackOnly(ctx.db, () => applyPlan(ctx, plan, report, new Map()));
+    rollbackOnly(ctx.db, () => applyPlan(ctx, memberId, plan, report, new Map()));
     return Promise.resolve(report);
   });
 }
@@ -708,17 +824,22 @@ export interface ImportOptions {
   onLookup?: (done: number, total: number) => void;
 }
 
-/** `POST /api/import/bookpine`: enrich, snapshot, apply in one transaction, cache covers. */
+/**
+ * `POST /api/import/bookpine`: enrich, snapshot, apply in one transaction,
+ * cache covers. Imports into the scope's member.
+ */
 export function importBookpine(
   ctx: AppContext,
+  scope: MemberScope,
   csv: string,
   options: ImportOptions = {},
 ): Promise<BookpineReport> {
+  const memberId = scope.member.id;
   return guard(ctx, async () => {
     const plan = readBookpinePlan(ctx, csv);
     const report = blankReport(plan, false);
 
-    const toEnrich = resolveTargets(ctx, plan, []).filter((target) =>
+    const toEnrich = resolveTargets(ctx, memberId, plan, []).filter((target) =>
       needsEnrichment(ctx.db, target),
     );
     const enrichments = new Map<PlannedBook, Enrichment>();
@@ -745,11 +866,11 @@ export function importBookpine(
     }
 
     report.snapshot = writeSnapshot(ctx, 'pre-import');
-    const touched = transaction(ctx.db, () => applyPlan(ctx, plan, report, enrichments));
+    const touched = transaction(ctx.db, () => applyPlan(ctx, memberId, plan, report, enrichments));
 
     let first = true;
     for (const book of touched) {
-      const current = findBook(ctx.db, book.id);
+      const current = findBook(ctx.db, memberId, book.id);
       if (!current?.coverUrl || current.coverPath) continue;
       if (!first) await ctx.sleep(COVER_INTERVAL_MS);
       first = false;
