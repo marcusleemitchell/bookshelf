@@ -18,7 +18,16 @@
  * a `PATH`, and `BOOKSHELF_TZ` pinned to the Mac's timezone at install time
  * (unless `.env` sets it), so sessions keep their days when the Mac travels.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,11 +54,24 @@ const HEALTH_ATTEMPTS = 30;
 const HEALTH_INTERVAL_MS = 500;
 /** How long install waits for a replaced agent to release the port. */
 const RELEASE_ATTEMPTS = 10;
+/** How long install waits for launchd to finish removing a replaced agent. */
+const UNLOAD_ATTEMPTS = 20;
+/**
+ * `launchctl bootstrap` fails with exit 5 ("Input/output error") while launchd
+ * is still tearing down an agent with the same label; retry that a few times.
+ */
+const BOOTSTRAP_BUSY_CODE = 5;
+const BOOTSTRAP_ATTEMPTS = 5;
+
+/** What the built web app is made from, relative to the repo. */
+const WEB_SOURCES = ['web', 'shared', 'package.json', 'package-lock.json'];
+/** Directories under {@link WEB_SOURCES} that are not source. */
+const NOT_SOURCE_DIRS = new Set(['dist', 'node_modules']);
 
 const USAGE = `Usage: node scripts/service.ts <command>
 
 Commands:
-  install            build the web app if needed, install and start the launchd agent
+  install            build the web app if missing or out of date, install and start the launchd agent
   uninstall          stop the agent and remove it (data and logs are kept)
   status             show whether the agent is installed, running and answering
   logs [-n N] [-f]   show the last N log lines (default 50); -f keeps following
@@ -76,6 +98,8 @@ export interface ServicePaths {
   plistPath: string;
   serverEntry: string;
   webIndex: string;
+  /** Files and directories the web build is made from (see {@link newestMtime}). */
+  webSources: string[];
   logsDir: string;
   stdoutPath: string;
   stderrPath: string;
@@ -92,6 +116,7 @@ export function servicePaths(repoRoot: string, homeDir: string, dataDir: string)
     plistPath: agentPlistPath(homeDir),
     serverEntry: join(repoRoot, 'server', 'index.ts'),
     webIndex: join(repoRoot, 'web', 'dist', 'index.html'),
+    webSources: WEB_SOURCES.map((source) => join(repoRoot, source)),
     logsDir,
     stdoutPath: join(logsDir, 'bookshelf.log'),
     stderrPath: join(logsDir, 'bookshelf.err.log'),
@@ -277,9 +302,36 @@ function renderFor(deps: ServiceDeps, resolved: Resolved): string {
   });
 }
 
+/**
+ * The newest modification time (ms) of `path` and everything under it,
+ * skipping {@link NOT_SOURCE_DIRS}; 0 when it does not exist. Directory times
+ * count too, so a source file deleted by `git pull` still marks the build stale.
+ */
+export function newestMtime(path: string): number {
+  if (!existsSync(path)) return 0;
+  const stats = statSync(path);
+  if (!stats.isDirectory()) return stats.mtimeMs;
+  let newest = stats.mtimeMs;
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.isDirectory() && NOT_SOURCE_DIRS.has(entry.name)) continue;
+    newest = Math.max(newest, newestMtime(join(path, entry.name)));
+  }
+  return newest;
+}
+
+/** Why the web app needs building (missing, or older than its source), or null. */
+function webBuildReason(paths: ServicePaths): string | null {
+  if (!existsSync(paths.webIndex)) return 'The web app is not built yet';
+  const builtAt = statSync(paths.webIndex).mtimeMs;
+  return paths.webSources.some((source) => newestMtime(source) > builtAt)
+    ? 'The web app is older than its source'
+    : null;
+}
+
 async function ensureWebBuild(deps: ServiceDeps, paths: ServicePaths): Promise<void> {
-  if (existsSync(paths.webIndex)) return;
-  deps.out('The web app is not built yet; running `npm run build`…');
+  const reason = webBuildReason(paths);
+  if (!reason) return;
+  deps.out(`${reason}; running \`npm run build\`…`);
   const result = await deps.run('npm', ['run', 'build'], { cwd: deps.repoRoot, inherit: true });
   if (result.code !== 0 || !existsSync(paths.webIndex)) {
     throw new ScriptError(
@@ -299,6 +351,28 @@ async function describePortUser(deps: ServiceDeps, port: number): Promise<string
   const command = /^c(.+)$/m.exec(lsof.stdout)?.[1];
   const who = pid && command ? ` by ${command} (pid ${pid})` : ' by another program';
   return `Port ${port} is already in use${who}. Stop that program or choose another port with PORT in .env, then run the install again.`;
+}
+
+/** `bootout` returns before launchd has removed the agent; wait until it has. */
+async function waitForUnload(deps: ServiceDeps): Promise<boolean> {
+  for (let attempt = 0; attempt < UNLOAD_ATTEMPTS; attempt += 1) {
+    if (!(await agentState(deps)).loaded) return true;
+    await deps.sleep(HEALTH_INTERVAL_MS);
+  }
+  return false;
+}
+
+async function bootstrap(deps: ServiceDeps, plistPath: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const result = await deps.run('launchctl', ['bootstrap', `gui/${deps.uid}`, plistPath]);
+    if (result.code === 0) return;
+    if (result.code !== BOOTSTRAP_BUSY_CODE || attempt === BOOTSTRAP_ATTEMPTS) {
+      throw new ScriptError(
+        `launchctl bootstrap failed (exit ${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+      );
+    }
+    await deps.sleep(HEALTH_INTERVAL_MS);
+  }
 }
 
 async function waitForPortRelease(deps: ServiceDeps, port: number): Promise<boolean> {
@@ -321,6 +395,11 @@ async function install(deps: ServiceDeps): Promise<number> {
   if (existing.loaded) {
     deps.out('Stopping the installed Bookshelf service to replace it…');
     await bootout(deps);
+    if (!(await waitForUnload(deps))) {
+      throw new ScriptError(
+        'launchd is still stopping the old Bookshelf service; wait a few seconds and run the install again.',
+      );
+    }
     if (!(await waitForPortRelease(deps, port))) {
       throw new ScriptError(await describePortUser(deps, port));
     }
@@ -331,12 +410,7 @@ async function install(deps: ServiceDeps): Promise<number> {
   mkdirSync(dirname(paths.plistPath), { recursive: true });
   mkdirSync(paths.logsDir, { recursive: true });
   writeFileSync(paths.plistPath, renderFor(deps, resolved), { mode: 0o644 });
-  const bootstrap = await deps.run('launchctl', ['bootstrap', `gui/${deps.uid}`, paths.plistPath]);
-  if (bootstrap.code !== 0) {
-    throw new ScriptError(
-      `launchctl bootstrap failed (exit ${bootstrap.code}): ${bootstrap.stderr.trim() || bootstrap.stdout.trim()}`,
-    );
-  }
+  await bootstrap(deps, paths.plistPath);
 
   deps.out(`Installed ${paths.plistPath}`);
   deps.out(`  Node:     ${deps.nodePath}`);

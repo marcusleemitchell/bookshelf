@@ -41,7 +41,7 @@ On first start the server creates the data directory, applies database migration
 Bookshelf can run as a launchd agent so it starts when you log in and restarts itself if it crashes:
 
 ```sh
-npm run service:install     # builds the web app if needed, installs and starts the agent
+npm run service:install     # builds the web app if missing or out of date, installs and starts the agent
 npm run service:status      # installed? running? answering on 127.0.0.1:<PORT>?
 npm run service:logs        # last 50 log lines; `npm run service:logs -- -f` to follow
 npm run service:uninstall   # stop and remove the agent (your data and logs are kept)
@@ -54,7 +54,7 @@ npm run service:uninstall   # stop and remove the agent (your data and logs are 
 - logs to `BOOKSHELF_DATA_DIR/logs/bookshelf.log` (JSON lines) and `bookshelf.err.log` (startup failures);
 - reads `.env` like `npm start` does, with `BOOKSHELF_TZ` fixed to the Mac's timezone at install time unless `.env` sets it — so your reading days don't shift if the Mac's clock changes zone while travelling.
 
-Install refuses, with an explanation, if the port is already taken — for example by a Bookshelf you started with `npm start` (stop it first) or by another program (change `PORT` in `.env`). Running it again replaces the installed agent; do that after changing `.env`, moving the repo, or switching Node installations. To restart the server after `git pull` + `npm run build`, run `npm run service:install` again (or `launchctl kickstart -k gui/$(id -u)/com.bookshelf.server`).
+Install refuses, with an explanation, if the port is already taken — for example by a Bookshelf you started with `npm start` (stop it first) or by another program (change `PORT` in `.env`). Running it again replaces the installed agent; do that after `git pull`, changing `.env`, moving the repo, or switching Node installations. It rebuilds the web app first when anything it is built from (`web/`, `shared/`, `package.json`, `package-lock.json`) is newer than `web/dist`, so the server never serves an app older than itself. When replacing the agent it waits for launchd to finish removing the old one before starting the new one (launchd otherwise answers `Bootstrap failed: 5: Input/output error`). `launchctl kickstart -k gui/$(id -u)/com.bookshelf.server` also restarts the server, but does not rebuild the web app.
 
 To preview the agent without installing it: `node scripts/service.ts plist`.
 
@@ -146,8 +146,7 @@ When the camera can't be used the app explains why; type the ISBN instead. The b
 ```sh
 git pull
 npm install
-npm run build
-npm run service:install   # restarts the service on the new code
+npm run service:install   # rebuilds the web app if the code changed, then restarts the service
 ```
 
 The installed app picks up the new version by itself: the next launch (or the one after) loads it. Database migrations run automatically when the server starts. For a belt-and-braces update, export a backup first (see below).

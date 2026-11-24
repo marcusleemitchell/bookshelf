@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -353,6 +354,10 @@ interface HarnessOptions {
   unhealthy?: boolean;
   /** The port stays in use after our agent stops. */
   portStuck?: boolean;
+  /** `launchctl print` still finds the agent this many times after `bootout`. */
+  slowUnload?: number;
+  /** `launchctl bootstrap` fails with exit 5 this many times before working. */
+  busyBootstraps?: number;
   override?: (call: Call) => CommandResult | undefined;
 }
 
@@ -381,6 +386,8 @@ function harness(options: HarnessOptions = {}) {
 
   let loaded = options.loaded ?? false;
   let running = loaded;
+  let unloading = 0;
+  let busyBootstraps = options.busyBootstraps ?? 0;
   const calls: Call[] = [];
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -403,6 +410,10 @@ function harness(options: HarnessOptions = {}) {
       if (overridden) return Promise.resolve(overridden);
       const key = `${command} ${args.join(' ')}`;
       if (key === `launchctl print ${TARGET}`) {
+        if (unloading > 0) {
+          unloading -= 1;
+          if (unloading === 0) loaded = false;
+        }
         return Promise.resolve(
           loaded
             ? ok(
@@ -416,11 +427,21 @@ function harness(options: HarnessOptions = {}) {
         );
       }
       if (key === `launchctl bootout ${TARGET}`) {
-        loaded = false;
+        // Like launchd, the process stops before the agent is fully removed.
+        unloading = options.slowUnload ?? 0;
+        loaded = unloading > 0;
         running = false;
         return Promise.resolve(ok());
       }
       if (command === 'launchctl' && args[0] === 'bootstrap') {
+        if (loaded || busyBootstraps > 0) {
+          busyBootstraps -= 1;
+          return Promise.resolve({
+            code: 5,
+            stdout: '',
+            stderr: 'Bootstrap failed: 5: Input/output error\n',
+          });
+        }
         loaded = true;
         running = true;
         return Promise.resolve(ok());
@@ -537,6 +558,74 @@ describe('install', () => {
     expect(h.stdout[0]).toContain('The web app is not built yet');
   });
 
+  describe('with an existing build', () => {
+    const BUILT = new Date('2026-11-20T10:00:00Z');
+    const EARLIER = new Date('2026-11-19T10:00:00Z');
+    const LATER = new Date('2026-11-24T09:00:00Z');
+
+    /** Writes `relative` under the repo with the given modification time. */
+    function touch(repoRoot: string, relative: string, at: Date): string {
+      const path = join(repoRoot, relative);
+      mkdirSync(join(path, '..'), { recursive: true });
+      writeFileSync(path, 'x');
+      utimesSync(path, at, at);
+      return path;
+    }
+
+    /** A built repo whose sources and directories all predate the build. */
+    function builtRepo(options: HarnessOptions = {}) {
+      const h = harness(options);
+      for (const file of ['web/src/main.tsx', 'shared/schemas.ts', 'package.json']) {
+        touch(h.repoRoot, file, EARLIER);
+      }
+      for (const dir of ['web/src', 'shared', 'web']) {
+        utimesSync(join(h.repoRoot, dir), EARLIER, EARLIER);
+      }
+      utimesSync(join(h.repoRoot, 'web/dist/index.html'), BUILT, BUILT);
+      return h;
+    }
+
+    it('keeps a build that is newer than its source, ignoring dist and node_modules', async () => {
+      const h = builtRepo();
+      touch(h.repoRoot, 'web/dist/assets/index.js', LATER);
+      touch(h.repoRoot, 'web/node_modules/.vite/deps.json', LATER);
+      utimesSync(join(h.repoRoot, 'web'), EARLIER, EARLIER);
+      await expect(main(['install'], h.deps)).resolves.toBe(0);
+      expect(h.calls.some((c) => c.command === 'npm')).toBe(false);
+    });
+
+    it.each([
+      ['a changed web file', 'web/src/main.tsx'],
+      ['a changed shared file', 'shared/schemas.ts'],
+      ['a changed lockfile', 'package-lock.json'],
+    ])('rebuilds after %s', async (_, file) => {
+      const h = builtRepo();
+      touch(h.repoRoot, file, LATER);
+      await expect(main(['install'], h.deps)).resolves.toBe(0);
+      expect(commandsOf(h.calls)).toContain('npm run build');
+      expect(h.stdout[0]).toBe('The web app is older than its source; running `npm run build`…');
+    });
+
+    it('rebuilds after a source file was deleted', async () => {
+      const h = builtRepo();
+      utimesSync(join(h.repoRoot, 'web/src'), LATER, LATER);
+      await expect(main(['install'], h.deps)).resolves.toBe(0);
+      expect(commandsOf(h.calls)).toContain('npm run build');
+    });
+
+    it('stops when the rebuild fails, leaving the old agent alone', async () => {
+      const h = builtRepo({
+        loaded: true,
+        override: (call) =>
+          call.command === 'npm' ? { code: 1, stdout: '', stderr: 'tsc failed' } : undefined,
+      });
+      touch(h.repoRoot, 'web/src/main.tsx', LATER);
+      await expect(main(['install'], h.deps)).resolves.toBe(1);
+      expect(h.stderr.join('\n')).toContain('Building the web app failed');
+      expect(h.calls.some((c) => c.args[0] === 'bootout')).toBe(false);
+    });
+  });
+
   it('stops when the build fails', async () => {
     const h = harness({
       built: false,
@@ -583,9 +672,42 @@ describe('install', () => {
     expect(commandsOf(h.calls)).toEqual([
       `launchctl print ${TARGET}`,
       `launchctl bootout ${TARGET}`,
+      `launchctl print ${TARGET}`,
       `launchctl bootstrap gui/${UID} ${h.plistPath}`,
     ]);
     expect(h.stdout[0]).toBe('Stopping the installed Bookshelf service to replace it…');
+  });
+
+  it('waits for launchd to finish removing the old agent before starting the new one', async () => {
+    const h = harness({ loaded: true, slowUnload: 3 });
+    await expect(main(['install'], h.deps)).resolves.toBe(0);
+    expect(commandsOf(h.calls)).toEqual([
+      `launchctl print ${TARGET}`,
+      `launchctl bootout ${TARGET}`,
+      `launchctl print ${TARGET}`,
+      `launchctl print ${TARGET}`,
+      `launchctl print ${TARGET}`,
+      `launchctl bootstrap gui/${UID} ${h.plistPath}`,
+    ]);
+    expect(h.sleeps).toEqual([500, 500]);
+    expect(h.stderr).toEqual([]);
+  });
+
+  it('gives up when launchd never finishes removing the old agent', async () => {
+    const h = harness({ loaded: true, slowUnload: 1000 });
+    await expect(main(['install'], h.deps)).resolves.toBe(1);
+    expect(h.sleeps).toHaveLength(20);
+    expect(h.stderr.join('\n')).toBe(
+      'launchd is still stopping the old Bookshelf service; wait a few seconds and run the install again.',
+    );
+    expect(h.calls.some((c) => c.args[0] === 'bootstrap')).toBe(false);
+  });
+
+  it('retries bootstrap while launchd is still busy with a just-stopped agent', async () => {
+    const h = harness({ busyBootstraps: 2 });
+    await expect(main(['install'], h.deps)).resolves.toBe(0);
+    expect(h.calls.filter((c) => c.args[0] === 'bootstrap')).toHaveLength(3);
+    expect(h.sleeps).toEqual([500, 500]);
   });
 
   it('refuses when the port is still held after stopping the old agent', async () => {
@@ -603,8 +725,21 @@ describe('install', () => {
           : undefined,
     });
     await expect(main(['install'], bootstrapFails.deps)).resolves.toBe(1);
+    expect(bootstrapFails.calls.filter((c) => c.args[0] === 'bootstrap')).toHaveLength(5);
     expect(bootstrapFails.stderr.join('\n')).toBe(
       'launchctl bootstrap failed (exit 5): Bootstrap failed: 5: Input/output error',
+    );
+
+    const bootstrapRefuses = harness({
+      override: (call) =>
+        call.args[0] === 'bootstrap'
+          ? { code: 1, stdout: '', stderr: 'Operation not permitted' }
+          : undefined,
+    });
+    await expect(main(['install'], bootstrapRefuses.deps)).resolves.toBe(1);
+    expect(bootstrapRefuses.calls.filter((c) => c.args[0] === 'bootstrap')).toHaveLength(1);
+    expect(bootstrapRefuses.stderr.join('\n')).toBe(
+      'launchctl bootstrap failed (exit 1): Operation not permitted',
     );
 
     const bootoutFails = harness({
@@ -798,6 +933,7 @@ describe('servicePaths', () => {
       plistPath: `/Users/reader/Library/LaunchAgents/${LABEL}.plist`,
       serverEntry: '/repo/server/index.ts',
       webIndex: '/repo/web/dist/index.html',
+      webSources: ['/repo/web', '/repo/shared', '/repo/package.json', '/repo/package-lock.json'],
       logsDir: '/data/logs',
       stdoutPath: '/data/logs/bookshelf.log',
       stderrPath: '/data/logs/bookshelf.err.log',
