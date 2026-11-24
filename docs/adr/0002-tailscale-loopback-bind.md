@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 14/11/2026
+- Amended by: ADR 0010 (the tailnet is shared with the family, so the app adds PIN sign-in; the loopback bind is unchanged)
 
 ## Context
 

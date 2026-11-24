@@ -1,6 +1,6 @@
 # 0010. Family profiles: shared catalogue, personal shelves, light PIN sign-in
 
-- Status: proposed
+- Status: accepted (step 1 implemented: members, PIN sign-in, migration 0005)
 - Date: 23/11/2026
 - Amends: ADR 0002 (the tailnet is no longer the only boundary), ADR 0004 (last-write-wins now only applies to rows one member owns)
 

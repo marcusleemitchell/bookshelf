@@ -55,7 +55,14 @@ describe('Outbox', () => {
     const { outbox, sync } = setup(() => (call++ === 0 ? 'applied' : 'stale'));
     await outbox.enqueue([op('a'), op('b')]);
     const outcome = await outbox.replay();
-    expect(outcome).toEqual({ sent: 2, done: 2, retrying: 0, failed: 0, offline: false });
+    expect(outcome).toEqual({
+      sent: 2,
+      done: 2,
+      retrying: 0,
+      failed: 0,
+      offline: false,
+      signedOut: false,
+    });
     expect(sync.mock.calls[0]?.[0].map((o) => o.entity)).toEqual(['note', 'note']);
     expect(await outbox.list()).toEqual([]);
     expect(outbox.lastReplayAt).toBe('2026-11-14T10:00:00.000Z');
@@ -68,6 +75,16 @@ describe('Outbox', () => {
     expect(outcome.offline).toBe(true);
     expect(outcome.sent).toBe(0);
     expect((await outbox.list())[0]).toMatchObject({ attempts: 0, state: 'pending' });
+  });
+
+  it('keeps ops without counting a failure when no one is signed in', async () => {
+    const { outbox } = setup(() =>
+      Promise.reject(new ApiError(401, 'unauthorised', 'Sign in to continue')),
+    );
+    await outbox.enqueue([op('a')]);
+    const outcome = await outbox.replay();
+    expect(outcome).toMatchObject({ sent: 0, signedOut: true, offline: false });
+    expect((await outbox.list())[0]).toMatchObject({ state: 'pending', failures: 0, attempts: 0 });
   });
 
   it('retries not_found indefinitely without counting failures', async () => {

@@ -230,6 +230,8 @@ export const errorCodeSchema = z.enum([
   'notion_not_configured',
   'notion_busy',
   'unsupported_backup',
+  'unauthorised',
+  'too_many_attempts',
   'internal_error',
 ]);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
@@ -249,6 +251,51 @@ export const healthResponseSchema = z.object({
   dbPath: z.string(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Members & sign-in (ADR 0010)
+// ---------------------------------------------------------------------------
+
+export const memberRoleSchema = z.enum(['parent', 'child']);
+export type MemberRole = z.infer<typeof memberRoleSchema>;
+/** A PIN is 4 to 8 digits. */
+export const pinSchema = z.string().regex(/^\d{4,8}$/, 'A PIN is 4 to 8 digits');
+
+/** What the profile picker shows about a member; never the PIN or its hash. */
+export const memberProfileSchema = z.object({
+  id: idSchema,
+  name: z.string(),
+  role: memberRoleSchema,
+  hasPin: z.boolean(),
+});
+export type MemberProfile = z.infer<typeof memberProfileSchema>;
+
+/**
+ * `GET /api/auth/state`, readable without signing in. `setupRequired` is true
+ * until a parent has a PIN; `me` is the signed-in member, or null.
+ */
+export const authStateSchema = z.object({
+  setupRequired: z.boolean(),
+  members: z.array(memberProfileSchema),
+  me: memberProfileSchema.nullable(),
+});
+export type AuthState = z.infer<typeof authStateSchema>;
+
+/** First run: names the owner and sets their PIN. */
+export const authSetupSchema = z.object({
+  name: z.string().trim().min(1).max(50),
+  pin: pinSchema,
+});
+export type AuthSetup = z.infer<typeof authSetupSchema>;
+
+export const signInSchema = z.object({ memberId: idSchema, pin: pinSchema });
+export type SignIn = z.infer<typeof signInSchema>;
+
+export const pinChangeSchema = z.object({ currentPin: pinSchema, newPin: pinSchema });
+export type PinChange = z.infer<typeof pinChangeSchema>;
+
+export const signInResponseSchema = z.object({ member: memberProfileSchema });
+export type SignInResponse = z.infer<typeof signInResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Lookup

@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { goalWithProgressSchema } from '../../../shared/index.ts';
-import { IDS, bookpineReport, health, leGuin, library, makeGoal } from '../test/fixtures.ts';
+import {
+  IDS,
+  authState,
+  bookpineReport,
+  health,
+  leGuin,
+  library,
+  makeGoal,
+  owner,
+} from '../test/fixtures.ts';
 import { apiError, createMockServer, ok } from '../test/server.ts';
 import { ApiError, OfflineError, createApiClient, errorMessage, isOfflineError } from './client.ts';
 
@@ -136,6 +145,45 @@ describe('createApiClient', () => {
     ).resolves.toMatchObject({
       created: false,
     });
+  });
+
+  it('signs in, out and changes the PIN through the auth routes', async () => {
+    const server = createMockServer({
+      'GET /api/auth/state': ok(authState()),
+      'POST /api/auth/setup': ok({ member: owner }),
+      'POST /api/auth/sign-in': ok({ member: owner }),
+      'POST /api/auth/sign-out': () => ({ status: 204 }),
+      'PUT /api/auth/pin': () => ({ status: 204 }),
+    });
+    const api = createApiClient({ fetch: server.fetch });
+    await expect(api.authState()).resolves.toEqual(authState());
+    await expect(api.setUp({ name: 'Alex', pin: '2468' })).resolves.toEqual({ member: owner });
+    await expect(api.signIn({ memberId: owner.id, pin: '2468' })).resolves.toEqual({
+      member: owner,
+    });
+    await expect(api.changePin({ currentPin: '2468', newPin: '1357' })).resolves.toBeUndefined();
+    await expect(api.signOut()).resolves.toBeUndefined();
+    expect(server.callsTo('PUT', '/api/auth/pin')[0]?.body).toEqual({
+      currentPin: '2468',
+      newPin: '1357',
+    });
+  });
+
+  it('reports an ended session, but not a wrong PIN, as signed out', async () => {
+    const server = createMockServer({
+      'GET /api/books': () => apiError(401, 'unauthorised', 'Sign in to continue'),
+      'POST /api/auth/sign-in': () => apiError(401, 'unauthorised', 'Wrong PIN'),
+    });
+    const onUnauthorised = vi.fn();
+    const api = createApiClient({ fetch: server.fetch, onUnauthorised });
+    await expect(api.signIn({ memberId: owner.id, pin: '0000' })).rejects.toMatchObject({
+      status: 401,
+      code: 'unauthorised',
+      message: 'Wrong PIN',
+    });
+    expect(onUnauthorised).not.toHaveBeenCalled();
+    await expect(api.listBooks()).rejects.toBeInstanceOf(ApiError);
+    expect(onUnauthorised).toHaveBeenCalledTimes(1);
   });
 
   it('exposes every endpoint through the same request path', async () => {

@@ -1,7 +1,8 @@
 /**
  * Test harness: a fresh SQLite database in an OS temp directory (never the
  * real data dir), a fixed clock, a fetch mock that fails on any unexpected
- * request (no network in tests) and a captured logger.
+ * request (no network in tests), a captured logger and, unless disabled, a
+ * signed-in owner whose session cookie `request()` sends.
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,10 @@ import type { Config, NotionConfig } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { openDatabase } from '../db/database.ts';
 import { migrate } from '../db/migrate.ts';
+import { SESSION_COOKIE } from '../http/auth.ts';
 import { createLogger } from '../logger.ts';
+import { findOwner, insertAuthSession, type MemberRow } from '../repositories/members.ts';
+import { hashToken, SESSION_TTL_MS } from '../services/auth.ts';
 
 export interface FetchCall {
   url: string;
@@ -97,6 +101,8 @@ export interface TestEnvOptions {
   notion?: NotionConfig | null;
   googleBooksApiKey?: string | null;
   appOptions?: AppOptions;
+  /** Sign the owner in (default true); false starts without a session cookie. */
+  signedIn?: boolean;
 }
 
 export interface ApiResponse<T = unknown> {
@@ -113,7 +119,18 @@ export interface TestEnv {
   logs: Record<string, unknown>[];
   sleeps: number[];
   clock: { set(iso: string): void; advance(ms: number): void; ms(): number };
-  request<T = unknown>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>>;
+  /** The owner created by migration 0005 (as it was before the test ran). */
+  owner: MemberRow;
+  /** The `Cookie` header `request()` sends; null sends none. */
+  cookie: string | null;
+  /** Headers carrying {@link cookie}, for tests that call `app.request` directly. */
+  authHeaders(): Record<string, string>;
+  request<T = unknown>(
+    method: string,
+    path: string,
+    body?: unknown,
+    headers?: Record<string, string>,
+  ): Promise<ApiResponse<T>>;
   cleanup(): void;
 }
 
@@ -159,7 +176,22 @@ export function createTestEnv(options: TestEnvOptions = {}): TestEnv {
   mkdirSync(config.coversDir, { recursive: true });
   mkdirSync(config.backupsDir, { recursive: true });
   const app = createApp(ctx, options.appOptions ?? {});
-  return {
+  const owner = findOwner(db);
+  if (!owner) throw new Error('Migration 0005 did not create the owner');
+  let cookie: string | null = null;
+  if (options.signedIn ?? true) {
+    const token = 'test-session-token';
+    const at = new Date(nowMs);
+    insertAuthSession(db, {
+      tokenHash: hashToken(token),
+      memberId: owner.id,
+      createdAt: at.toISOString(),
+      renewedAt: at.toISOString(),
+      expiresAt: new Date(at.getTime() + SESSION_TTL_MS).toISOString(),
+    });
+    cookie = `${SESSION_COOKIE}=${token}`;
+  }
+  const env: TestEnv = {
     ctx,
     app,
     dir,
@@ -175,12 +207,26 @@ export function createTestEnv(options: TestEnvOptions = {}): TestEnv {
       },
       ms: () => nowMs,
     },
-    async request<T>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>> {
+    owner,
+    cookie,
+    authHeaders() {
+      const headers: Record<string, string> = {};
+      if (env.cookie) headers['cookie'] = env.cookie;
+      return headers;
+    },
+    async request<T>(
+      method: string,
+      path: string,
+      body?: unknown,
+      headers: Record<string, string> = {},
+    ): Promise<ApiResponse<T>> {
       const init: RequestInit = { method };
+      const sent = env.authHeaders();
       if (body !== undefined) {
         init.body = typeof body === 'string' ? body : JSON.stringify(body);
-        init.headers = { 'content-type': 'application/json' };
+        sent['content-type'] = 'application/json';
       }
+      init.headers = { ...sent, ...headers };
       const response = await app.request(path, init);
       const text = await response.text();
       let parsed: unknown = null;
@@ -198,4 +244,5 @@ export function createTestEnv(options: TestEnvOptions = {}): TestEnv {
       rmSync(dir, { recursive: true, force: true });
     },
   };
+  return env;
 }

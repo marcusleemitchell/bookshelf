@@ -72,17 +72,25 @@ describe('migrate', () => {
   it('applies the shipped migrations to a fresh database', () => {
     const result = migrate(db, MIGRATIONS_DIR, () => new Date('2026-11-14T12:00:00.000Z'));
     expect(result).toEqual({
-      applied: ['0001_initial', '0002_paused_status', '0003_untimed_sessions', '0004_import_links'],
-      version: 4,
+      applied: [
+        '0001_initial',
+        '0002_paused_status',
+        '0003_untimed_sessions',
+        '0004_import_links',
+        '0005_members',
+      ],
+      version: 5,
     });
     expect(tables()).toEqual([
       'active_timer',
+      'auth_sessions',
       'book_formats',
       'book_notes',
       'book_tags',
       'books',
       'goals',
       'import_links',
+      'members',
       'notion_pages',
       'reads',
       'schema_migrations',
@@ -96,6 +104,7 @@ describe('migrate', () => {
       { version: 2, name: 'paused_status', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 3, name: 'untimed_sessions', applied_at: '2026-11-14T12:00:00.000Z' },
       { version: 4, name: 'import_links', applied_at: '2026-11-14T12:00:00.000Z' },
+      { version: 5, name: 'members', applied_at: '2026-11-14T12:00:00.000Z' },
     ]);
     expect(db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
@@ -137,6 +146,39 @@ describe('migrate', () => {
       db.exec(
         `INSERT INTO book_formats (id, book_id, format, created_at, updated_at) VALUES ('f2', 'missing', 'kindle', '${T}', '${T}')`,
       );
+    }).toThrow(/FOREIGN KEY/);
+  });
+
+  it('creates the owner, a parent without a PIN, and leaves existing rows alone', () => {
+    migrate(db, shippedMigrationsUpTo(4));
+    seedVersion1();
+    const before = db.prepare('SELECT * FROM books').all();
+    expect(migrate(db).applied).toEqual(['0005_members']);
+    expect(db.prepare('SELECT * FROM books').all()).toEqual(before);
+    const members = db
+      .prepare('SELECT id, name, role, pin_hash, failed_pin_attempts, created_at FROM members')
+      .all();
+    expect(members).toEqual([
+      {
+        id: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        ) as unknown,
+        name: 'Owner',
+        role: 'parent',
+        pin_hash: null,
+        failed_pin_attempts: 0,
+        created_at: expect.stringMatching(
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+        ) as unknown,
+      },
+    ]);
+    expect(() => {
+      db.exec(`INSERT INTO members (id, name, role, created_at, updated_at)
+        VALUES ('m2', 'Robin', 'guest', '${T}', '${T}')`);
+    }).toThrow(/CHECK/);
+    expect(() => {
+      db.exec(`INSERT INTO auth_sessions (token_hash, member_id, created_at, renewed_at, expires_at)
+        VALUES ('h', 'missing', '${T}', '${T}', '${T}')`);
     }).toThrow(/FOREIGN KEY/);
   });
 

@@ -1,5 +1,5 @@
 /**
- * Settings (SPEC §6.8): goals, tags, backup (JSON export via share sheet or
+ * Settings (SPEC §6.8): profile (change PIN, sign out), goals, tags, backup (JSON export via share sheet or
  * download, JSON import, Notion sync and status), the Bookpine import
  * (pick CSV → preview → confirm → result), server status and the offline
  * outbox (pending / failed changes, retry and discard).
@@ -12,12 +12,14 @@ import {
   healthResponseSchema,
   localDateKey,
   notionStatusSchema,
+  pinSchema,
   tagListSchema,
   type BackupEnvelope,
   type BackupImportResponse,
   type BookpineReport,
   type GoalKind,
   type GoalWithProgress,
+  type MemberProfile,
   type NotionRunResult,
   type Tag,
 } from '../../../shared/index.ts';
@@ -28,20 +30,23 @@ import {
   useReachable,
   useResource,
   useServices,
+  useStore,
 } from '../app/hooks.ts';
-import { invalidate, syncNow } from '../app/services.ts';
-import { ActionError, ResourceView, ScreenHeader } from '../components/ui.tsx';
+import { invalidate, showToast, signOut, syncNow } from '../app/services.ts';
+import { ActionError, PinField, ResourceView, ScreenHeader } from '../components/ui.tsx';
 import { todayKey } from '../lib/dates.ts';
 import { readFileText, saveTextFile } from '../lib/files.ts';
 import { GOAL_LABELS, plural } from '../lib/labels.ts';
 import { cacheKeys } from '../offline/cache.ts';
 import type { OutboxRecord } from '../offline/db.ts';
+import { PIN_MISMATCH, PIN_RULE } from './SignIn.tsx';
 
 export function Settings() {
   return (
     <>
       <ScreenHeader title="Settings" />
       <div className="stack">
+        <ProfileSection />
         <GoalsSection />
         <TagsSection />
         <BackupSection />
@@ -51,6 +56,107 @@ export function Settings() {
         <OutboxSection />
       </div>
     </>
+  );
+}
+
+// ------------------------------------------------------------------ Profile
+
+const ROLE_LABELS: Record<MemberProfile['role'], string> = { parent: 'Parent', child: 'Child' };
+
+function ProfileSection() {
+  const services = useServices();
+  const auth = useStore(services.auth);
+  const { pending } = useOutboxCounts();
+  const signingOut = useAction();
+  if (auth.status !== 'signedIn') return null;
+  const { me } = auth;
+  return (
+    <section className="section" aria-labelledby="settings-profile">
+      <h2 id="settings-profile">Profile</h2>
+      <div className="card stack-sm">
+        <p>
+          Signed in as <strong>{me.name}</strong> · {ROLE_LABELS[me.role]}
+        </p>
+        <ChangePinForm />
+        {pending > 0 && (
+          <p className="small muted">
+            {plural(pending, 'change')} waiting to sync will be sent after the next sign-in.
+          </p>
+        )}
+        <button
+          type="button"
+          className="btn"
+          disabled={signingOut.busy}
+          onClick={() => {
+            signingOut.run(() => signOut(services));
+          }}
+        >
+          {signingOut.busy ? 'Signing out…' : 'Sign out'}
+        </button>
+        <ActionError error={signingOut.error} />
+      </div>
+    </section>
+  );
+}
+
+function ChangePinForm() {
+  const services = useServices();
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
+  return (
+    <form
+      className="stack-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const valid =
+          pinSchema.safeParse(currentPin).success && pinSchema.safeParse(newPin).success;
+        const issue = !valid ? PIN_RULE : newPin !== confirm ? PIN_MISMATCH : null;
+        setProblem(issue);
+        if (issue) return;
+        run(async () => {
+          await services.api.changePin({ currentPin, newPin });
+          setCurrentPin('');
+          setNewPin('');
+          setConfirm('');
+          showToast(services, 'PIN changed. Other devices have been signed out.');
+        });
+      }}
+    >
+      <h3>Change PIN</h3>
+      <PinField
+        id="pin-current"
+        label="Current PIN"
+        value={currentPin}
+        onChange={setCurrentPin}
+        autoComplete="current-password"
+      />
+      <PinField
+        id="pin-new"
+        label="New PIN"
+        value={newPin}
+        onChange={setNewPin}
+        autoComplete="new-password"
+      />
+      <PinField
+        id="pin-confirm"
+        label="Confirm new PIN"
+        value={confirm}
+        onChange={setConfirm}
+        autoComplete="new-password"
+      />
+      {problem && (
+        <p className="error-text" role="alert">
+          {problem}
+        </p>
+      )}
+      <ActionError error={error} />
+      <button type="submit" className="btn btn-small" disabled={busy}>
+        {busy ? 'Saving…' : 'Change PIN'}
+      </button>
+    </form>
   );
 }
 

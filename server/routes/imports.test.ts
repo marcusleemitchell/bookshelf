@@ -101,7 +101,11 @@ async function post(
   body: string | FormData,
   headers: Record<string, string> = { 'content-type': 'text/csv' },
 ): Promise<{ status: number; body: unknown }> {
-  const res = await env.app.request(path, { method: 'POST', body, headers });
+  const res = await env.app.request(path, {
+    method: 'POST',
+    body,
+    headers: { ...env.authHeaders(), ...headers },
+  });
   const parsed: unknown = await res.json();
   return { status: res.status, body: parsed };
 }

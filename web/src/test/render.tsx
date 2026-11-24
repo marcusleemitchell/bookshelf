@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { App } from '../App.tsx';
 import type { Services } from '../app/services.ts';
 import {
+  authState,
   calendar,
   daily,
   health,
@@ -44,6 +45,7 @@ export function defaultRoutes(): RouteTable {
     'GET /api/tags': ok(tags()),
     'GET /api/calendar': (req) => ({ body: calendar(req.query.get('month') ?? '2026-11') }),
     'GET /api/health': ok(health),
+    'GET /api/auth/state': ok(authState()),
     'GET /api/backup/notion/status': ok(notionStatus),
   };
 }

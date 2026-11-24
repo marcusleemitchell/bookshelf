@@ -598,7 +598,7 @@ describe('GET /api/covers/:bookId', () => {
   it('serves the cached file', async () => {
     env.fetchMock.on('https://covers.example.org/', () => image());
     const book = await addBook({ coverUrl: 'https://covers.example.org/c.png' });
-    const res = await env.app.request(`/api/covers/${book.id}`);
+    const res = await env.app.request(`/api/covers/${book.id}`, { headers: env.authHeaders() });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('image/png');
     expect(res.headers.get('cache-control')).toBe('private, max-age=86400');
@@ -613,12 +613,14 @@ describe('GET /api/covers/:bookId', () => {
     const book = await addBook({ coverUrl: 'https://covers.example.org/c.png' });
     expect(book.coverPath).toBeNull();
 
-    const redirect = await env.app.request(`/api/covers/${book.id}`);
+    const redirect = await env.app.request(`/api/covers/${book.id}`, {
+      headers: env.authHeaders(),
+    });
     expect(redirect.status).toBe(302);
     expect(redirect.headers.get('location')).toBe('https://covers.example.org/c.png');
 
     available = true;
-    const healed = await env.app.request(`/api/covers/${book.id}`);
+    const healed = await env.app.request(`/api/covers/${book.id}`, { headers: env.authHeaders() });
     expect(healed.status).toBe(200);
     expect(healed.headers.get('content-type')).toBe('image/png');
   });
@@ -629,7 +631,7 @@ describe('GET /api/covers/:bookId', () => {
     env.ctx.db
       .prepare('UPDATE books SET cover_path = ? WHERE id = ?')
       .run(`${book.id}.bin`, book.id);
-    const res = await env.app.request(`/api/covers/${book.id}`);
+    const res = await env.app.request(`/api/covers/${book.id}`, { headers: env.authHeaders() });
     expect(res.headers.get('content-type')).toBe('application/octet-stream');
   });
 

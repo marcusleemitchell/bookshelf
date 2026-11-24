@@ -2,7 +2,7 @@
 
 A personal, self-hosted reading tracker. Log reading sessions (time and progress) across physical books, Kindle ebooks and audiobooks; build a library by ISBN or title search; see statistics, a reading calendar, streaks and goals; and keep everything backed up locally (with an optional one-way mirror to Notion).
 
-It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Single user, no accounts.
+It runs as a small Node server on your Mac with a SQLite database as the single source of truth. The main client is an iPhone browser (installed to the Home Screen); a Mac browser works too. Family members sign in with a PIN; for now there is one profile, yours ([ADR 0010](docs/adr/0010-family-profiles.md) plans the rest).
 
 > Status: complete for daily use — server and API, backups, Notion mirror, the installable web app (offline support, barcode scanning), a launchd service and HTTPS access through Tailscale. It also imports your Bookpine history (see [Importing from Bookpine](#importing-from-bookpine)). Importing from Notion is not planned: it would hold the same data, and Notion stays a one-way mirror.
 
@@ -62,7 +62,7 @@ To preview the agent without installing it: `node scripts/service.ts plist`.
 
 The server only listens on `127.0.0.1`, so nothing on your network can reach it directly. [Tailscale](https://tailscale.com) gives your own devices a private network (a _tailnet_) and `tailscale serve` publishes the server on it over HTTPS, with a certificate Tailscale manages. HTTPS is what lets the iPhone install the app and use the camera.
 
-> Bookshelf has no login of its own: everyone who can reach your tailnet can use it. Use a personal tailnet that only your devices are in — not a work or shared one. Never use `tailscale funnel`, which would publish it to the internet.
+> The tailnet is the outer wall: only devices in it can reach Bookshelf, and inside it Bookshelf asks for a PIN. Invite only your household to the tailnet — not a work or shared one — and never use `tailscale funnel`, which would publish it to the internet.
 
 One-off set-up:
 
@@ -108,7 +108,9 @@ On the Mac itself, just open <http://127.0.0.1:4380> (or your `PORT`) in any bro
 
 ## Using the app
 
-Open Bookshelf from the Home Screen (or <http://127.0.0.1:4380> on the Mac). The tab bar has five screens:
+Open Bookshelf from the Home Screen (or <http://127.0.0.1:4380> on the Mac). The first time, it asks for your name and a PIN (4–8 digits); after that each device signs in once with the PIN and stays signed in (for 180 days after you last used it). Five wrong PINs in a row lock sign-in for 15 minutes. **Settings → Profile** changes the PIN (which signs out your other devices) or signs this device out, which also removes the data it keeps for offline use.
+
+The tab bar has five screens:
 
 - **Today** — the reading timer (start, pause, resume, then **Stop & log** to turn it into a session), the books you're reading with progress and an estimated finish date, today's minutes against your daily goal, and your streak. The timer keeps running while the app is closed.
 - **Library** — shelves (Reading, Paused, To read, Finished, Did not finish), tag filter and search. Pausing a book keeps its current read open (it leaves Today's list); logging a session or choosing Reading again resumes it. **Add book** (also on Today) finds books by scanning the barcode, typing the ISBN, or searching by title/author, then lets you pick your formats (physical, Kindle, audiobook) and their lengths. Anything the services don't know can be entered manually.
@@ -116,7 +118,7 @@ Open Bookshelf from the Home Screen (or <http://127.0.0.1:4380> on the Mac). The
 - **Log session** — from a book or the timer: format, when you read, and progress as pages (or audiobook position, `h:mm:ss`) and percent side by side. Type either and the other fills in from the book's length; the session is saved in whichever you typed, and the form shows the pages and percent gained.
 - **Calendar** — each day shows the covers of what you read; tap a day for its sessions.
 - **Stats** — week / month / year / all time: reading time, pages and progress charts, breakdowns by format, genre, tag and author, reading speed, goals and a year in review.
-- **Settings** — goals, tags, backup export/import, Bookpine import, Notion sync, server status and offline changes.
+- **Settings** — profile (PIN, sign out), goals, tags, backup export/import, Bookpine import, Notion sync, server status and offline changes.
 
 A typical day: tap **Start timer** on Today when you sit down to read (or put the audiobook on), **Stop & log** when you finish and enter where you got to — the page, the percentage Kindle shows, or the audiobook position. Forgot the timer? **Log** on a book records a session after the fact. Adding a book takes a barcode scan or a search; Open Library supplies the cover, synopsis and page count, which you can correct before saving.
 
@@ -229,6 +231,7 @@ npm run tailscale:status   # is Tailscale signed in, is HTTPS on, is Bookshelf p
 - **Days look off by one** (a late-night session on the wrong day, a broken streak): the Mac's `BOOKSHELF_TZ` and the iPhone's timezone differ. Set `BOOKSHELF_TZ` in `.env` and run `npm run service:install`.
 - **Looked-up books have no synopsis.** Open Library has no description for that edition; type one in, or set `GOOGLE_BOOKS_API_KEY` so Google Books can fill it (keyless Google Books requests are refused).
 - **The camera does not start.** Use the HTTPS address (not plain `http://` to the Mac's name) and allow camera access for Safari (**Settings → Apps → Safari → Camera**).
+- **Forgot the PIN.** There is no reset in the app yet. Stop the server, back up `bookshelf.db`, then clear the PIN so the app asks for setup again: `sqlite3 "<data dir>/bookshelf.db" "UPDATE members SET pin_hash = NULL, failed_pin_attempts = 0, locked_until = NULL; DELETE FROM auth_sessions;"`, and start the server.
 - **A change is marked as failed** in the offline banner: **Settings → Offline changes** shows why, with Retry and Discard.
 - **The log files are getting large.** They are plain append-only files; empty them at any time with `: > "<data dir>/logs/bookshelf.log"` (the path is shown by `service:status`).
 
@@ -314,7 +317,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 - [ADR 0007](docs/adr/0007-offline-read-model-and-client-bookkeeping.md) — offline read model in IndexedDB and client-side read bookkeeping
 - [ADR 0008](docs/adr/0008-open-library-records-for-synopsis.md) — Open Library edition and work records supply synopsis and language
 - [ADR 0009](docs/adr/0009-bookpine-import.md) — Bookpine import: untimed sessions, merged editions and provenance
-- [ADR 0010](docs/adr/0010-family-profiles.md) — _proposed_: family profiles with a shared catalogue, personal shelves and light PIN sign-in
+- [ADR 0010](docs/adr/0010-family-profiles.md) — family profiles with a shared catalogue, personal shelves and light PIN sign-in (step 1 of 4 built)
 
 ## Roadmap
 

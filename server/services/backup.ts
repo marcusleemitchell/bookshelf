@@ -3,7 +3,8 @@
  * all-or-nothing import that always writes a pre-import snapshot first.
  * Backups include soft-deleted rows and import provenance (so a restored
  * library can still be re-imported without duplicates). Server-internal state
- * (settings, sync op log, Notion page mapping) is not part of a backup.
+ * (settings, sync op log, Notion page mapping, members and sign-in sessions)
+ * is not part of a backup.
  */
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

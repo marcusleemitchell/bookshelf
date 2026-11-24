@@ -11,9 +11,12 @@
  * - any other error (`validation_error`, `conflict`, `internal_error`):
  *   retried until it has failed {@link MAX_FAILURES} times in a row, then
  *   marked `failed` and surfaced so the user can retry or discard it.
+ *
+ * A replay refused because no one is signed in (401) stops like an offline
+ * one: nothing is counted against the ops, which wait for the next sign-in.
  */
 import type { SyncEntity, SyncOp, SyncOpResult } from '../../../shared/index.ts';
-import { isOfflineError, type ApiClient } from '../api/client.ts';
+import { ApiError, isOfflineError, type ApiClient } from '../api/client.ts';
 import { newId } from '../lib/ids.ts';
 import type { LocalDb, OutboxRecord } from './db.ts';
 
@@ -46,6 +49,8 @@ export interface ReplayOutcome {
   failed: number;
   /** True when the server could not be reached. */
   offline: boolean;
+  /** True when the server refused the replay because no one is signed in. */
+  signedOut: boolean;
 }
 
 type Listener = () => void;
@@ -141,7 +146,14 @@ export class Outbox {
   }
 
   async #runReplay(): Promise<ReplayOutcome> {
-    const outcome: ReplayOutcome = { sent: 0, done: 0, retrying: 0, failed: 0, offline: false };
+    const outcome: ReplayOutcome = {
+      sent: 0,
+      done: 0,
+      retrying: 0,
+      failed: 0,
+      offline: false,
+      signedOut: false,
+    };
     const pending = await this.#db.outbox.where('state').equals('pending').sortBy('seq');
     for (let start = 0; start < pending.length; start += SYNC_BATCH_SIZE) {
       const batch = pending.slice(start, start + SYNC_BATCH_SIZE);
@@ -158,6 +170,10 @@ export class Outbox {
       } catch (error) {
         if (isOfflineError(error)) {
           outcome.offline = true;
+          break;
+        }
+        if (error instanceof ApiError && error.code === 'unauthorised') {
+          outcome.signedOut = true;
           break;
         }
         // The whole request was rejected: count it against every op in it.

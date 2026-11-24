@@ -3,7 +3,7 @@
  */
 import type { ErrorCode } from '../../shared/index.ts';
 
-export type ErrorStatus = 400 | 404 | 409 | 500 | 502;
+export type ErrorStatus = 400 | 401 | 404 | 409 | 429 | 500 | 502;
 
 export class AppError extends Error {
   override readonly name = 'AppError';
@@ -21,6 +21,10 @@ export class AppError extends Error {
 
 export function validationError(message: string, details?: unknown): AppError {
   return new AppError(400, 'validation_error', message, details);
+}
+
+export function unauthorised(message: string): AppError {
+  return new AppError(401, 'unauthorised', message);
 }
 
 export function notFound(what: string): AppError {

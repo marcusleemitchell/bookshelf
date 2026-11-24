@@ -164,3 +164,36 @@ export function ActionError({ error }: { error: unknown }) {
     </p>
   );
 }
+
+/** A numeric PIN input (digits only, at most 8; SPEC §5 sign-in). */
+export function PinField({
+  id,
+  label,
+  value,
+  onChange,
+  autoComplete,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (pin: string) => void;
+  autoComplete: 'current-password' | 'new-password';
+}) {
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        type="password"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        maxLength={8}
+        autoComplete={autoComplete}
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value.replace(/\D/g, ''));
+        }}
+      />
+    </div>
+  );
+}

@@ -1,10 +1,17 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { backupEnvelopeSchema, type NotionRunResult } from '../../../shared/index.ts';
+import {
+  backupEnvelopeSchema,
+  tagListSchema,
+  type NotionRunResult,
+} from '../../../shared/index.ts';
+import { cacheKeys } from '../offline/cache.ts';
 import { readFileText } from '../lib/files.ts';
 import {
   IDS,
   NOW,
+  authState,
+  owner,
   hailMary,
   leGuin,
   makeGoal,
@@ -51,6 +58,86 @@ function section(name: string): HTMLElement {
 }
 
 describe('Settings', () => {
+  it('shows who is signed in and changes the PIN', async () => {
+    const { user, server, services } = renderApp({
+      hash: '#/settings',
+      routes: {
+        'PUT /api/auth/pin': (req) =>
+          (req.body as { currentPin: string }).currentPin === '2468'
+            ? { status: 204 }
+            : apiError(401, 'unauthorised', 'Wrong PIN'),
+      },
+    });
+    const profile = await screen.findByRole('heading', { name: 'Profile' });
+    expect(profile.closest('section')).toHaveTextContent('Signed in as Alex · Parent');
+    const panel = within(section('Profile'));
+    const change = panel.getByRole('button', { name: 'Change PIN' });
+
+    await user.type(panel.getByLabelText('Current PIN'), '2468');
+    await user.type(panel.getByLabelText('New PIN'), '135');
+    await user.type(panel.getByLabelText('Confirm new PIN'), '135');
+    await user.click(change);
+    expect(panel.getByRole('alert')).toHaveTextContent('A PIN is 4 to 8 digits.');
+    await user.type(panel.getByLabelText('New PIN'), '7');
+    await user.type(panel.getByLabelText('Confirm new PIN'), '8');
+    await user.click(change);
+    expect(panel.getByRole('alert')).toHaveTextContent('The two PINs don’t match.');
+    expect(server.callsTo('PUT', '/api/auth/pin')).toHaveLength(0);
+
+    // A wrong current PIN is an error on the form, not the end of the session.
+    await user.clear(panel.getByLabelText('Current PIN'));
+    await user.type(panel.getByLabelText('Current PIN'), '1111');
+    await user.clear(panel.getByLabelText('Confirm new PIN'));
+    await user.type(panel.getByLabelText('Confirm new PIN'), '1357');
+    await user.click(change);
+    expect(await panel.findByText('Wrong PIN')).toBeInTheDocument();
+    expect(services.auth.get().status).toBe('signedIn');
+
+    await user.clear(panel.getByLabelText('Current PIN'));
+    await user.type(panel.getByLabelText('Current PIN'), '2468');
+    await user.click(change);
+    expect(
+      await screen.findByText('PIN changed. Other devices have been signed out.'),
+    ).toBeInTheDocument();
+    expect(server.callsTo('PUT', '/api/auth/pin').at(-1)?.body).toEqual({
+      currentPin: '2468',
+      newPin: '1357',
+    });
+    expect(panel.getByLabelText('Current PIN')).toHaveValue('');
+  });
+
+  it('signs out, forgetting cached data but keeping queued changes', async () => {
+    let signedIn = true;
+    const { user, server, services } = renderApp({
+      hash: '#/settings',
+      routes: {
+        'GET /api/auth/state': () => ({
+          body: signedIn ? authState() : authState({ members: [owner], me: null }),
+        }),
+        'POST /api/auth/sign-out': () => {
+          signedIn = false;
+          return { status: 204 };
+        },
+      },
+    });
+    expect(await screen.findByLabelText('Name of tag Book club')).toBeInTheDocument();
+    await waitFor(async () => {
+      expect(await services.cache.get(cacheKeys.tags, tagListSchema)).toHaveLength(2);
+    });
+    await services.outbox.enqueue([
+      { entity: 'note', action: 'delete', payload: { id: IDS.note }, label: 'Note' },
+    ]);
+    expect(
+      await screen.findByText('1 change waiting to sync will be sent after the next sign-in.'),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('heading', { name: 'Hello, Alex' })).toBeVisible();
+    expect(server.callsTo('POST', '/api/auth/sign-out')).toHaveLength(1);
+    expect(await services.cache.get(cacheKeys.tags, tagListSchema)).toBeUndefined();
+    expect(await services.outbox.counts()).toEqual({ pending: 1, failed: 0 });
+  });
+
   it('updates an existing goal (200) and creates a new one (201)', async () => {
     const { user, server } = renderApp({
       hash: '#/settings',

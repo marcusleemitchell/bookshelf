@@ -7,10 +7,12 @@
  *   or a proxy such as `tailscale serve` answering 502–504 because the Mac
  *   server is down). Offline-capable actions fall back to the outbox.
  * - {@link ApiError}: the server answered with the `{ error }` envelope (or
- *   an unexpected payload).
+ *   an unexpected payload). A 401 `unauthorised` outside the sign-in routes
+ *   means the session ended; the client reports it through `onUnauthorised`.
  */
 import type { z } from 'zod';
 import {
+  authStateSchema,
   backupEnvelopeSchema,
   backupImportResponseSchema,
   bookCandidateListSchema,
@@ -30,6 +32,7 @@ import {
   notionStatusSchema,
   readSchema,
   sessionListSchema,
+  signInResponseSchema,
   sessionSchema,
   statsDailySchema,
   statsSummarySchema,
@@ -39,6 +42,7 @@ import {
   tagSchema,
   timerResponseSchema,
   yearInReviewSchema,
+  type AuthSetup,
   type BackupEnvelope,
   type BookCreate,
   type BookListQuery,
@@ -49,10 +53,12 @@ import {
   type GoalPut,
   type NoteCreate,
   type NoteUpdate,
+  type PinChange,
   type ReadCreate,
   type SessionCreate,
   type SessionListQuery,
   type SessionUpdate,
+  type SignIn,
   type StatsRangeQuery,
   type SyncOp,
   type TagCreate,
@@ -98,6 +104,8 @@ export interface ApiClientOptions {
   fetch?: typeof fetch;
   /** Called with `true` after any answer from the server and `false` when it is unreachable. */
   onReachability?: (reachable: boolean) => void;
+  /** Called when a request outside `/auth/` is refused because no one is signed in. */
+  onUnauthorised?: () => void;
 }
 
 type Query = Record<string, string | number | undefined>;
@@ -128,6 +136,7 @@ const PROXY_DOWN_STATUSES = new Set([502, 503, 504]);
 export function createApiClient(options: ApiClientOptions = {}) {
   const doFetch = options.fetch ?? ((input, init) => fetch(input, init));
   const report = options.onReachability ?? (() => undefined);
+  const signedOut = options.onUnauthorised ?? (() => undefined);
 
   async function send(
     method: string,
@@ -176,6 +185,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       if (envelope.success) {
         report(true);
         const { code, message, details } = envelope.data.error;
+        // A wrong PIN is also a 401, but it does not end a session.
+        if (code === 'unauthorised' && !path.startsWith('/auth/')) signedOut();
         throw new ApiError(response.status, code, message, details);
       }
       if (PROXY_DOWN_STATUSES.has(response.status)) {
@@ -233,6 +244,17 @@ export function createApiClient(options: ApiClientOptions = {}) {
   return {
     health: (signal?: AbortSignal) =>
       request('GET', '/health', { schema: healthResponseSchema, signal }),
+
+    authState: () => request('GET', '/auth/state', { schema: authStateSchema }),
+    /** First run: names the owner, sets their PIN and signs in. */
+    setUp: (body: AuthSetup) =>
+      request('POST', '/auth/setup', { body, schema: signInResponseSchema }),
+    signIn: (body: SignIn) =>
+      request('POST', '/auth/sign-in', { body, schema: signInResponseSchema }),
+    signOut: () => requestNoContent('POST', '/auth/sign-out'),
+    changePin: async (body: PinChange) => {
+      await send('PUT', '/auth/pin', undefined, body, undefined);
+    },
 
     lookupIsbn: (isbn: string) =>
       request('GET', `/lookup/isbn/${id(isbn)}`, { schema: bookCandidateSchema }),

@@ -1,12 +1,20 @@
 /**
  * The app shell: offline banner, the current screen (hash router), toasts and
- * the bottom tab bar. Also owns the sync triggers that replay the outbox
- * (on start, reconnect, return to the app and on an interval).
+ * the bottom tab bar, or the sign-in screen while no one is signed in. Also
+ * owns the sync triggers that replay the outbox (on start, reconnect, return
+ * to the app and on an interval) and the sign-in check (ADR 0010).
  */
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useOutboxCounts, useReachable, useServices, useStore } from './app/hooks.ts';
 import { ServicesContext } from './app/hooks.ts';
-import { createServices, invalidate, syncNow, type Services } from './app/services.ts';
+import {
+  createServices,
+  invalidate,
+  refreshAuth,
+  syncNow,
+  type AuthStatus,
+  type Services,
+} from './app/services.ts';
 import {
   CalendarIcon,
   LibraryIcon,
@@ -22,6 +30,7 @@ import { Library } from './screens/Library.tsx';
 import { LogSession } from './screens/LogSession.tsx';
 import { NotFound } from './screens/NotFound.tsx';
 import { Settings } from './screens/Settings.tsx';
+import { SignIn } from './screens/SignIn.tsx';
 import { Today } from './screens/Today.tsx';
 import { Loading } from './components/ui.tsx';
 
@@ -146,6 +155,29 @@ function useSyncTriggers(): void {
   }, [services]);
 }
 
+/**
+ * Asks the server who is signed in on start, loads the profiles when a
+ * session ends, and asks again once an unanswered check can reach the server.
+ */
+function useAuthGate(): AuthStatus {
+  const services = useServices();
+  const auth = useStore(services.auth);
+  const needsCheck = auth.status === 'unverified' || (auth.status === 'signedOut' && !auth.state);
+  useEffect(() => {
+    void refreshAuth(services);
+  }, [services]);
+  useEffect(() => {
+    if (auth.status === 'signedOut' && auth.state === null) void refreshAuth(services);
+  }, [auth, services]);
+  useEffect(() => {
+    if (!needsCheck) return;
+    return services.connectivity.subscribe(() => {
+      if (services.connectivity.get() === true) void refreshAuth(services);
+    });
+  }, [needsCheck, services]);
+  return auth;
+}
+
 function routeKey(route: Route): string {
   return route.name === 'book' ? `book:${route.id}` : route.name;
 }
@@ -177,6 +209,7 @@ function Shell() {
   const route = useRoute();
   const key = routeKey(route);
   const previousKey = useRef<string | null>(null);
+  const auth = useAuthGate();
   useSyncTriggers();
 
   // Move focus to the new screen's heading on navigation (not on first load).
@@ -188,16 +221,23 @@ function Shell() {
     previousKey.current = key;
   }, [key]);
 
+  // The app renders while the check runs, so start-up never waits for the
+  // network; it gives way to sign-in once the server says no one is signed in.
+  const signedOut = auth.status === 'signedOut';
   return (
     <div className="app">
       <OfflineBanner />
       <main className="main" id="main">
-        <Suspense fallback={<Loading />}>
-          <Screen key={key} route={route} />
-        </Suspense>
+        {signedOut ? (
+          <SignIn state={auth.state} />
+        ) : (
+          <Suspense fallback={<Loading />}>
+            <Screen key={key} route={route} />
+          </Suspense>
+        )}
       </main>
       <Toast />
-      <TabBar active={tabFor(route)} />
+      {!signedOut && <TabBar active={tabFor(route)} />}
     </div>
   );
 }

@@ -107,7 +107,7 @@ describe('static web app', () => {
     expect(deepLink.headers.get('cache-control')).toBe('no-cache');
     expect(await deepLink.text()).toContain('Bookshelf');
 
-    const api = await app.request('/api/unknown');
+    const api = await app.request('/api/unknown', { headers: env.authHeaders() });
     expect(api.status).toBe(404);
     expect(api.headers.get('content-type')).toContain('application/json');
   });

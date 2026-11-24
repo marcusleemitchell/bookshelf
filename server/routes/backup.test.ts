@@ -79,7 +79,7 @@ async function seedLibrary(): Promise<BookDetail> {
 describe('GET /api/backup/export', () => {
   it('exports every table, including soft-deleted rows, in a versioned envelope', async () => {
     const book = await seedLibrary();
-    const res = await env.app.request('/api/backup/export');
+    const res = await env.app.request('/api/backup/export', { headers: env.authHeaders() });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-disposition')).toBe(
       'attachment; filename="bookshelf-backup-2026-11-14.json"',

@@ -55,7 +55,7 @@ Project-level rules, derived from the global `~/.claude/CLAUDE.md` (the referenc
 
 - British English everywhere (UI copy, docs, comments, error messages).
 - Dates shown to the user as `DD/MM/YYYY`; durations `1h 05m`; audio positions `h:mm:ss`. Use the helpers in `shared/format.ts`.
-- Single user, no accounts. The server binds `127.0.0.1` only (ADR 0002); never make the bind address configurable or add `0.0.0.0`.
+- One household: family members sign in with a PIN (ADR 0010; `server/services/auth.ts`, `server/http/auth.ts`). Every API route except health and `/api/auth/*` sign-in routes needs a session; never add a route to `PUBLIC_API_PATHS` without the user's approval. The server binds `127.0.0.1` only (ADR 0002); never make the bind address configurable or add `0.0.0.0`.
 - Notion is a one-way mirror (ADR 0006); restore is only from JSON backups.
 
 ## Data safety

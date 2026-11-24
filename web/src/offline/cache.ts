@@ -65,6 +65,11 @@ export class ReadModelCache {
     await this.put(key, change(current));
   }
 
+  /** Removes every entry (on sign-out, so the next person can't read them offline). */
+  async clear(): Promise<void> {
+    await this.#db.cache.clear();
+  }
+
   /** Removes entries older than `maxAgeMs`. Returns how many were removed. */
   async prune(maxAgeMs: number = CACHE_MAX_AGE_MS): Promise<number> {
     const cutoff = new Date(this.#now().getTime() - maxAgeMs).toISOString();

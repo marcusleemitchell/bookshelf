@@ -11,7 +11,9 @@ import { except } from 'hono/combine';
 import type { ErrorResponse } from '../shared/index.ts';
 import type { AppContext } from './context.ts';
 import { isConstraintError } from './db/database.ts';
+import { PUBLIC_API_PATHS, requireMember, type AuthEnv } from './http/auth.ts';
 import { AppError } from './http/errors.ts';
+import { authRoutes } from './routes/auth.ts';
 import { dataRoutes } from './routes/data.ts';
 import { importRoutes } from './routes/imports.ts';
 import { insightRoutes } from './routes/insights.ts';
@@ -77,7 +79,7 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Hono {
     return c.json(errorBody('internal_error', 'Internal server error'), 500);
   });
 
-  const api = new Hono();
+  const api = new Hono<AuthEnv>();
   // Backup and Bookpine imports have their own, larger limits (routes/data.ts, routes/imports.ts).
   api.use(
     '*',
@@ -95,6 +97,9 @@ export function createApp(ctx: AppContext, options: AppOptions = {}): Hono {
       }),
     ),
   );
+  // Everything but health and the sign-in routes needs a signed-in member (ADR 0010).
+  api.use('*', except(PUBLIC_API_PATHS, requireMember(ctx)));
+  api.route('/', authRoutes(ctx));
   api.route('/', insightRoutes(ctx));
   api.route('/', libraryRoutes(ctx));
   api.route('/', readingRoutes(ctx));

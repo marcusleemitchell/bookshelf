@@ -51,4 +51,12 @@ describe('ReadModelCache', () => {
     );
     expect(cacheKeys.yearInReview(2026)).toBe('stats:year:2026');
   });
+
+  it('forgets every entry on clear', async () => {
+    const { cache } = setup();
+    await cache.put(cacheKeys.books, library());
+    await cache.put(cacheKeys.tags, []);
+    await cache.clear();
+    expect(await cache.get(cacheKeys.books, bookListSchema)).toBeUndefined();
+  });
 });

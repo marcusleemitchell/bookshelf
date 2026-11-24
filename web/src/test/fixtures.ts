@@ -5,6 +5,7 @@
  */
 import {
   activeTimerSchema,
+  authStateSchema,
   bookCandidateSchema,
   bookDetailSchema,
   bookFormatSchema,
@@ -22,6 +23,7 @@ import {
   timerResponseSchema,
   yearInReviewSchema,
   type ActiveTimer,
+  type AuthState,
   type BookCandidate,
   type BookDetail,
   type BookFormat,
@@ -30,6 +32,7 @@ import {
   type BookpineReport,
   type CalendarResponse,
   type GoalWithProgress,
+  type MemberProfile,
   type Read,
   type Session,
   type StatsDaily,
@@ -66,6 +69,8 @@ export const IDS = {
   note: uuid(61),
   session1: uuid(71),
   session2: uuid(72),
+  owner: uuid(81),
+  sibling: uuid(82),
 } as const;
 
 const stamps = {
@@ -462,6 +467,15 @@ export function candidate(overrides: Partial<BookCandidate> = {}): BookCandidate
     pageCount: 272,
     ...overrides,
   });
+}
+
+/** Fictional family members (ADR 0010). */
+export const owner: MemberProfile = { id: IDS.owner, name: 'Alex', role: 'parent', hasPin: true };
+export const sibling: MemberProfile = { id: IDS.sibling, name: 'Jo', role: 'parent', hasPin: true };
+
+/** `GET /api/auth/state`: signed in as the owner unless `me` says otherwise. */
+export function authState(overrides: Partial<AuthState> = {}): AuthState {
+  return authStateSchema.parse({ setupRequired: false, members: [owner], me: owner, ...overrides });
 }
 
 export const health = { ok: true, version: '0.1.0', dbPath: '/tmp/bookshelf-test/bookshelf.db' };
