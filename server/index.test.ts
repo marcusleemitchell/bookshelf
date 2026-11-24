@@ -84,7 +84,7 @@ describe('server entry point', () => {
     const res = await fetch(`http://127.0.0.1:${port}/api/health`);
     expect(await res.json()).toEqual({
       ok: true,
-      version: '0.1.0',
+      version: '0.2.0',
       dbPath: join(dataDir, 'bookshelf.db'),
     });
     expect(server.output().stdout).toContain(`"url":"http://127.0.0.1:${port}"`);

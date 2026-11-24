@@ -31,7 +31,7 @@ Check it is running:
 
 ```sh
 curl http://127.0.0.1:4380/api/health
-# {"ok":true,"version":"0.1.0","dbPath":".../Bookshelf/bookshelf.db"}
+# {"ok":true,"version":"0.2.0","dbPath":".../Bookshelf/bookshelf.db"}
 ```
 
 On first start the server creates the data directory, applies database migrations and writes a startup snapshot.
