@@ -15,6 +15,7 @@ import {
   authStateSchema,
   backupEnvelopeSchema,
   backupImportResponseSchema,
+  bookAlternativesSchema,
   bookCandidateListSchema,
   bookCandidateSchema,
   bookDetailSchema,
@@ -269,6 +270,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     updateBook: (bookId: string, patch: BookUpdate) =>
       request('PATCH', `/books/${id(bookId)}`, { body: patch, schema: bookDetailSchema }),
     deleteBook: (bookId: string) => requestNoContent('DELETE', `/books/${id(bookId)}`),
+    /** Covers and synopses to choose from (parents and admins; needs the server). */
+    bookAlternatives: (bookId: string) =>
+      request('GET', `/books/${id(bookId)}/alternatives`, { schema: bookAlternativesSchema }),
 
     createFormat: (bookId: string, body: FormatCreate) =>
       request('POST', `/books/${id(bookId)}/formats`, { body, schema: bookFormatSchema }),

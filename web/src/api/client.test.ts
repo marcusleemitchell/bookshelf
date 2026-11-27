@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { goalWithProgressSchema } from '../../../shared/index.ts';
 import {
   IDS,
+  alternatives,
   authState,
   bookpineReport,
   health,
@@ -65,6 +66,14 @@ describe('createApiClient', () => {
       ],
       ['/api/import/bookpine', expect.objectContaining({ body: 'slug,title\n' })],
     ]);
+  });
+
+  it('fetches the alternative covers and synopses of a book', async () => {
+    const server = createMockServer({ 'GET /api/books/:id/alternatives': ok(alternatives()) });
+    const api = createApiClient({ fetch: server.fetch });
+    const result = await api.bookAlternatives(IDS.leGuin);
+    expect(result.covers).toHaveLength(2);
+    expect(server.calls[0]?.params['id']).toBe(IDS.leGuin);
   });
 
   it('turns error envelopes into ApiError with code and status', async () => {

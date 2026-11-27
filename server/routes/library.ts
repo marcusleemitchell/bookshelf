@@ -4,6 +4,7 @@
  */
 import { Hono } from 'hono';
 import {
+  bookAlternativesSchema,
   bookCreateSchema,
   bookDetailSchema,
   bookFormatSchema,
@@ -25,6 +26,7 @@ import type { AuthEnv } from '../http/auth.ts';
 import { notFound } from '../http/errors.ts';
 import { readJson, readParam, readQuery, respond } from '../http/validate.ts';
 import { findCatalogueBook } from '../repositories/books.ts';
+import { findAlternatives } from '../services/alternatives.ts';
 import { resolveCover } from '../services/covers.ts';
 import {
   createBook,
@@ -66,6 +68,9 @@ export function libraryRoutes(ctx: AppContext): Hono<AuthEnv> {
       await updateBook(ctx, scope(c), id, await readJson(c, bookUpdateSchema)),
     );
   });
+  app.get('/books/:id/alternatives', async (c) =>
+    respond(c, bookAlternativesSchema, await findAlternatives(ctx, scope(c), readParam(c, 'id'))),
+  );
   app.delete('/books/:id', (c) => {
     deleteBook(ctx, scope(c), readParam(c, 'id'));
     return c.body(null, 204);

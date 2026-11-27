@@ -245,3 +245,82 @@ export const OL_SEARCH_EDITIONS_RESPONSE = {
     },
   ],
 };
+
+// --- Alternatives (`GET /api/books/:id/alternatives`) ---
+// Shapes from real responses (27/11/2026): `/isbn/<isbn>.json` redirects to
+// the edition record; a work's `covers` lists every edition's cover ids,
+// using -1 as a "no cover" placeholder.
+
+/** Edition record `/isbn/9780140328721.json` resolves to (Fantastic Mr Fox, Puffin 1988). */
+export const OL_EDITION_RECORD_FOX = {
+  key: '/books/OL7353617M',
+  title: 'Fantastic Mr. Fox',
+  publishers: ['Puffin'],
+  publish_date: 'October 1, 1988',
+  covers: [8739161],
+  works: [{ key: '/works/OL45804W' }],
+  languages: [{ key: '/languages/eng' }],
+  latest_revision: 15,
+};
+
+/** Work record with every edition's covers (one shared with the edition, one placeholder). */
+export const OL_WORK_RECORD_FOX = {
+  ...OL_WORK_FOX,
+  covers: [6498519, 8904777, -1, 8739161, 108274],
+  latest_revision: 41,
+};
+
+/** Open Library title + author search (`fields=key,title`). */
+export const OL_TITLE_SEARCH_FOX = {
+  numFound: 2,
+  start: 0,
+  docs: [
+    { key: '/works/OL27448W', title: 'The Fox and the Hound' },
+    { key: '/works/OL45804W', title: 'Fantastic Mr. Fox' },
+  ],
+};
+
+/** Google Books `intitle:"Fantastic Mr Fox" inauthor:"Roald Dahl"`. */
+export const GOOGLE_ALTERNATIVES_FOX = {
+  kind: 'books#volumes',
+  totalItems: 4,
+  items: [
+    {
+      id: 'yTDjAwAAQBAJ',
+      volumeInfo: {
+        title: 'Fantastic Mr Fox',
+        authors: ['Roald Dahl'],
+        publisher: 'Penguin UK',
+        publishedDate: '2016-09-01',
+        description:
+          '<p><b>Boggis, Bunce and Bean</b> are the meanest farmers around.</p><p>And they hate Mr Fox!</p>',
+        imageLinks: {
+          smallThumbnail:
+            'http://books.google.com/books/content?id=yTDjAwAAQBAJ&printsec=frontcover&img=1&zoom=5&edge=curl&source=gbs_api',
+          thumbnail:
+            'http://books.google.com/books/content?id=yTDjAwAAQBAJ&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api',
+        },
+      },
+    },
+    {
+      id: 'Fox-audio',
+      volumeInfo: {
+        title: 'Fantastic Mr. Fox (Colour Edition)',
+        authors: ['Roald Dahl'],
+        publishedDate: '2007',
+        // The same words as the first volume, differently spaced.
+        description:
+          'Boggis, Bunce and Bean are the meanest farmers around.  And they hate Mr Fox!',
+      },
+    },
+    {
+      id: 'Fox-study-guide',
+      volumeInfo: {
+        title: 'A Study Guide for Fantastic Mr. Fox',
+        description: 'Notes for students.',
+        imageLinks: { thumbnail: 'https://books.google.com/books/content?id=Fox-study-guide' },
+      },
+    },
+    { id: 'missing-volume-info' },
+  ],
+};

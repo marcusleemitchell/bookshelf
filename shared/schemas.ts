@@ -366,6 +366,40 @@ export type LookupSearchQuery = z.infer<typeof lookupSearchQuerySchema>;
 
 export const bookCandidateListSchema = z.array(bookCandidateSchema);
 
+/** An upstream lookup source. */
+export const lookupSourceSchema = bookCandidateSchema.shape.source;
+export type LookupSource = z.infer<typeof lookupSourceSchema>;
+
+/** A cover found for a catalogue book (`GET /api/books/:id/alternatives`, ADR 0011). */
+export const coverOptionSchema = z.object({
+  /** Full-size image: what becomes the book's `coverUrl` when chosen. */
+  url: httpUrlSchema,
+  /** A smaller image for the picker (the same as `url` when there is none). */
+  previewUrl: httpUrlSchema,
+  source: lookupSourceSchema,
+  /** Where it was found, e.g. "This edition", "Open Library", "Google Books · Puffin, 1988". */
+  label: z.string(),
+});
+export type CoverOption = z.infer<typeof coverOptionSchema>;
+
+/** A synopsis found for a catalogue book; always short enough to save as `synopsis`. */
+export const synopsisOptionSchema = z.object({
+  text: z.string().min(1).max(20_000),
+  source: lookupSourceSchema,
+  /** Where it was found, e.g. "This edition", "Open Library work", "Google Books · Puffin, 1988". */
+  label: z.string(),
+});
+export type SynopsisOption = z.infer<typeof synopsisOptionSchema>;
+
+/** `GET /api/books/:id/alternatives`: covers and synopses to choose from (ADR 0011). */
+export const bookAlternativesSchema = z.object({
+  covers: z.array(coverOptionSchema),
+  synopses: z.array(synopsisOptionSchema),
+  /** Sources that failed, so some alternatives may be missing; empty when all answered. */
+  unavailable: z.array(lookupSourceSchema),
+});
+export type BookAlternatives = z.infer<typeof bookAlternativesSchema>;
+
 // ---------------------------------------------------------------------------
 // Books & formats
 // ---------------------------------------------------------------------------

@@ -317,6 +317,7 @@ The full contract is [docs/SPEC.md](docs/SPEC.md). Key decisions:
 - [ADR 0008](docs/adr/0008-open-library-records-for-synopsis.md) — Open Library edition and work records supply synopsis and language
 - [ADR 0009](docs/adr/0009-bookpine-import.md) — Bookpine import: untimed sessions, merged editions and provenance
 - [ADR 0010](docs/adr/0010-family-profiles.md) — family profiles with a shared catalogue, personal shelves and light PIN sign-in (steps 1 and 2a of 4 built)
+- [ADR 0011](docs/adr/0011-alternative-covers-and-synopses.md) — Alternative covers and synopses for editing a book, and versioned cover URLs
 
 ## Roadmap
 

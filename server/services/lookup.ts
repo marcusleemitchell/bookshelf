@@ -55,7 +55,7 @@ const olBookSchema = z.object({
 const olBooksResponseSchema = z.record(z.string(), z.unknown());
 
 /** Open Library text fields are either strings or `{ type: '/type/text', value }`. */
-const olTextSchema = z.union([
+export const olTextSchema = z.union([
   z.string(),
   z.object({ value: z.string() }).transform((text) => text.value),
 ]);
@@ -355,15 +355,19 @@ export function fromGoogleVolume(raw: unknown): BookCandidate | null {
 
 // --- Upstream calls ----------------------------------------------------------
 
-function parseUpstream<S extends z.ZodType>(schema: S, data: unknown, source: string): z.output<S> {
+export function parseUpstream<S extends z.ZodType>(
+  schema: S,
+  data: unknown,
+  source: string,
+): z.output<S> {
   const result = schema.safeParse(data);
   if (!result.success) throw new OutboundError(`Unexpected response shape from ${source}`, null);
   return result.data;
 }
 
-type Outcome<T> = { ok: true; value: T } | { ok: false; error: OutboundError };
+export type Outcome<T> = { ok: true; value: T } | { ok: false; error: OutboundError };
 
-async function attempt<T>(
+export async function attempt<T>(
   ctx: AppContext,
   source: string,
   fn: () => Promise<T>,
@@ -377,7 +381,7 @@ async function attempt<T>(
   }
 }
 
-function googleUrl(ctx: AppContext, query: string, startIndex = 0, maxResults = 1): string {
+export function googleUrl(ctx: AppContext, query: string, startIndex = 0, maxResults = 1): string {
   const params = new URLSearchParams({
     q: query,
     startIndex: String(startIndex),
@@ -441,7 +445,7 @@ async function enrichFromOpenLibrary(
   };
 }
 
-async function googleVolumes(ctx: AppContext, url: string): Promise<BookCandidate[]> {
+export async function googleVolumes(ctx: AppContext, url: string): Promise<BookCandidate[]> {
   const body = parseUpstream(googleResponseSchema, await fetchJson(ctx, url), 'Google Books');
   return (body.items ?? [])
     .map(fromGoogleVolume)

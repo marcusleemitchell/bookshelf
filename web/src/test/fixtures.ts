@@ -6,6 +6,7 @@
 import {
   activeTimerSchema,
   authStateSchema,
+  bookAlternativesSchema,
   bookCandidateSchema,
   bookDetailSchema,
   bookFormatSchema,
@@ -24,6 +25,7 @@ import {
   yearInReviewSchema,
   type ActiveTimer,
   type AuthState,
+  type BookAlternatives,
   type BookCandidate,
   type BookDetail,
   type BookFormat,
@@ -465,6 +467,40 @@ export function candidate(overrides: Partial<BookCandidate> = {}): BookCandidate
     isbn13: '9781526622426',
     genres: ['Fantasy'],
     pageCount: 272,
+    ...overrides,
+  });
+}
+
+/** `GET /api/books/:id/alternatives` for "The Left Hand of Darkness". */
+export function alternatives(overrides: Partial<BookAlternatives> = {}): BookAlternatives {
+  return bookAlternativesSchema.parse({
+    covers: [
+      {
+        url: 'https://covers.openlibrary.org/b/id/8231856-L.jpg',
+        previewUrl: 'https://covers.openlibrary.org/b/id/8231856-M.jpg',
+        source: 'openlibrary',
+        label: 'This edition',
+      },
+      {
+        url: 'https://covers.openlibrary.org/b/id/12882637-L.jpg',
+        previewUrl: 'https://covers.openlibrary.org/b/id/12882637-M.jpg',
+        source: 'openlibrary',
+        label: 'Open Library',
+      },
+    ],
+    synopses: [
+      {
+        text: 'A groundbreaking work of science fiction about a world without fixed gender.',
+        source: 'openlibrary',
+        label: 'Open Library work',
+      },
+      {
+        text: 'Genly Ai is sent to the planet Gethen to persuade it to join the Ekumen.',
+        source: 'googlebooks',
+        label: 'Google Books · Ace, 2000',
+      },
+    ],
+    unavailable: [],
     ...overrides,
   });
 }
