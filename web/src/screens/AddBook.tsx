@@ -25,6 +25,7 @@ import { useAction, useReachable, useResource, useServices } from '../app/hooks.
 import { BarcodeScanner, type ScannerDeps } from '../components/BarcodeScanner.tsx';
 import { ActionError, ScreenHeader } from '../components/ui.tsx';
 import { FORMAT_LABELS, STATUS_LABELS, STATUS_ORDER } from '../lib/labels.ts';
+import { splitList } from '../lib/text.ts';
 import { cacheKeys } from '../offline/cache.ts';
 import { href, navigate, paths } from '../router.ts';
 
@@ -393,13 +394,6 @@ function CandidateRow({
 interface FormatDraft {
   enabled: boolean;
   length: string;
-}
-
-function splitList(text: string): string[] {
-  return text
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
 }
 
 function ConfirmBook({ draft, onBack }: { draft: Draft; onBack: () => void }) {

@@ -33,6 +33,16 @@ export function useReachable(): boolean {
   return useStore(useServices().connectivity) !== false;
 }
 
+/**
+ * Whether the signed-in member may edit the shared catalogue: parents and
+ * admins, not children (ADR 0010; the server enforces it). False until the
+ * server has said who is signed in, since catalogue edits need it anyway.
+ */
+export function useCanEditCatalogue(): boolean {
+  const auth = useStore(useServices().auth);
+  return auth.status === 'signedIn' && (auth.me.role === 'parent' || auth.me.isAdmin);
+}
+
 /** Live outbox counts (pending / failed). */
 export function useOutboxCounts(): OutboxCounts {
   const { outbox } = useServices();

@@ -8,6 +8,7 @@
  * | `#/library`                  | Library                                  |
  * | `#/add`                      | Add book                                 |
  * | `#/books/:id`                | Book detail                              |
+ * | `#/books/:id/edit`           | Edit details (parents and admins)        |
  * | `#/log?book=:id&timer=1`     | Log session (optionally from the timer)  |
  * | `#/calendar?month=YYYY-MM`   | Calendar                                 |
  * | `#/stats`                    | Stats                                    |
@@ -20,6 +21,7 @@ export type Route =
   | { name: 'library' }
   | { name: 'add' }
   | { name: 'book'; id: string }
+  | { name: 'editBook'; id: string }
   | { name: 'log'; bookId: string | null; fromTimer: boolean }
   | { name: 'calendar'; month: string | null }
   | { name: 'stats' }
@@ -50,6 +52,8 @@ export function parseRoute(hash: string): Route {
   }
   const book = /^\/books\/([^/]+)$/.exec(path);
   if (book?.[1]) return { name: 'book', id: decodeURIComponent(book[1]) };
+  const edit = /^\/books\/([^/]+)\/edit$/.exec(path);
+  if (edit?.[1]) return { name: 'editBook', id: decodeURIComponent(edit[1]) };
   return { name: 'notFound', path };
 }
 
@@ -62,6 +66,7 @@ export function tabFor(route: Route): TabName | null {
     case 'library':
     case 'add':
     case 'book':
+    case 'editBook':
       return 'library';
     case 'calendar':
       return 'calendar';
@@ -80,6 +85,7 @@ export const paths = {
   library: () => '/library',
   add: () => '/add',
   book: (id: string) => `/books/${encodeURIComponent(id)}`,
+  editBook: (id: string) => `/books/${encodeURIComponent(id)}/edit`,
   log: (options: { bookId?: string; fromTimer?: boolean } = {}) => {
     const params = new URLSearchParams();
     if (options.bookId) params.set('book', options.bookId);

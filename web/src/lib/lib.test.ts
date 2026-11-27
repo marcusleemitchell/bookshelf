@@ -29,6 +29,7 @@ import {
   sessionDurationLabel,
   unknownTimeLabel,
 } from './labels.ts';
+import { splitList } from './text.ts';
 
 const TZ = 'Europe/London';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -169,5 +170,15 @@ describe('files', () => {
 
   it('reads picked files as text', async () => {
     await expect(readFileText(new Blob(['{"a":1}']))).resolves.toBe('{"a":1}');
+  });
+});
+
+describe('text', () => {
+  it('splits comma-separated fields into trimmed, non-empty parts', () => {
+    expect(splitList(' Ann Leckie,  Ursula K. Le Guin ,, ')).toEqual([
+      'Ann Leckie',
+      'Ursula K. Le Guin',
+    ]);
+    expect(splitList('')).toEqual([]);
   });
 });

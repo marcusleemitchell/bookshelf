@@ -2,7 +2,7 @@
  * Book detail (SPEC §6.4): cover, synopsis and metadata, formats, a progress
  * chart over time, the sessions list, notes & quotes, tags, rating, status
  * and rereads. Status, rating and notes work offline (outbox); the other
- * edits need the server.
+ * edits need the server. Parents and admins get "Edit details" (EditBook).
  */
 import { useState } from 'react';
 import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from 'recharts';
@@ -34,7 +34,7 @@ import {
   storeDetail,
   updateBookProgress,
 } from '../app/actions.ts';
-import { useAction, useResource, useServices } from '../app/hooks.ts';
+import { useAction, useCanEditCatalogue, useResource, useServices } from '../app/hooks.ts';
 import { invalidate } from '../app/services.ts';
 import { ChartFigure, DataTable, chartColours } from '../components/charts.tsx';
 import { ActionError, Cover, ProgressBar, ResourceView, ScreenHeader } from '../components/ui.tsx';
@@ -898,6 +898,7 @@ function ReadsSection({ book }: { book: BookDetail }) {
 }
 
 function AboutSection({ book }: { book: BookDetail }) {
+  const canEdit = useCanEditCatalogue();
   const rows: [string, string | null][] = [
     ['Publisher', book.publisher],
     ['Published', book.publishedDate && formatPublishedDate(book.publishedDate)],
@@ -916,7 +917,14 @@ function AboutSection({ book }: { book: BookDetail }) {
   ];
   return (
     <section className="section" aria-labelledby="about-heading">
-      <h2 id="about-heading">About</h2>
+      <div className="section-title">
+        <h2 id="about-heading">About</h2>
+        {canEdit && (
+          <a className="btn btn-ghost btn-small" href={href(paths.editBook(book.id))}>
+            Edit details
+          </a>
+        )}
+      </div>
       {book.synopsis && <p className="synopsis">{book.synopsis}</p>}
       <dl
         className="card"

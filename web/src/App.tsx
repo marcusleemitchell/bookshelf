@@ -26,6 +26,7 @@ import { plural } from './lib/labels.ts';
 import { href, paths, tabFor, useRoute, type Route, type TabName } from './router.ts';
 import { AddBook } from './screens/AddBook.tsx';
 import { CalendarScreen } from './screens/Calendar.tsx';
+import { EditBook } from './screens/EditBook.tsx';
 import { Library } from './screens/Library.tsx';
 import { LogSession } from './screens/LogSession.tsx';
 import { NotFound } from './screens/NotFound.tsx';
@@ -179,7 +180,9 @@ function useAuthGate(): AuthStatus {
 }
 
 function routeKey(route: Route): string {
-  return route.name === 'book' ? `book:${route.id}` : route.name;
+  return route.name === 'book' || route.name === 'editBook'
+    ? `${route.name}:${route.id}`
+    : route.name;
 }
 
 function Screen({ route }: { route: Route }) {
@@ -192,6 +195,8 @@ function Screen({ route }: { route: Route }) {
       return <AddBook />;
     case 'book':
       return <BookDetailScreen bookId={route.id} />;
+    case 'editBook':
+      return <EditBook bookId={route.id} />;
     case 'log':
       return <LogSession bookId={route.bookId} fromTimer={route.fromTimer} />;
     case 'calendar':

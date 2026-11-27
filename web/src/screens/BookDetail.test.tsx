@@ -61,7 +61,7 @@ describe('Book detail', () => {
         'GET /api/books/:id': ok(leGuin({ publishedDate: '2019-09-03', language: 'eng' })),
       }),
     });
-    const about = (await screen.findByRole('heading', { name: 'About' })).parentElement;
+    const about = (await screen.findByRole('heading', { name: 'About' })).closest('section');
     expect(about && within(about).getByText('03/09/2019')).toBeInTheDocument();
     expect(about && within(about).getByText('English')).toBeInTheDocument();
   });
