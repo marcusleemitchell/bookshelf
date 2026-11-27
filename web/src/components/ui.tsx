@@ -46,7 +46,7 @@ function initials(title: string): string {
 export type CoverSize = 'xs' | 'sm' | 'md' | 'lg' | 'fill';
 
 /**
- * A book cover from `coverSrc` (`/api/covers/:id`), or a typographic
+ * A book cover from `coverSrc` (`/api/covers/:id?v=<token>`), or a typographic
  * placeholder when there is none or it fails to load. Decorative: the title
  * is always shown or announced next to it.
  */

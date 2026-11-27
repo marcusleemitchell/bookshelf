@@ -2,7 +2,10 @@
  * Cover image cache (SPEC §2/§5). Covers are downloaded into
  * `<dataDir>/covers/<bookId>.<ext>` when a book is created (or its cover URL
  * changes) and lazily on first request if missing, e.g. after a restore.
+ * Clients address a cover by a versioned URL (`coverSrc`), so replacing a
+ * cover never leaves the old image in a browser or service worker cache.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CatalogueBook } from '../../shared/index.ts';
@@ -73,11 +76,21 @@ export function clearCover(ctx: AppContext, bookId: string): void {
   setCoverPath(ctx.db, bookId, null);
 }
 
-/** Relative URL clients use to display a book's cover, or null when it has none. */
+/**
+ * Relative URL clients use to display a book's cover, or null when it has
+ * none: `/api/covers/:id?v=<token>`. The token is a short hash of the remote
+ * cover URL (or the cached file name when there is no URL), so it changes
+ * exactly when the cover is replaced. Caches keyed by URL (the service
+ * worker's CacheFirst cover cache, `Cache-Control: max-age`) then fetch the
+ * new image instead of serving the old one. The route ignores the query.
+ */
 export function coverSrc(
   book: Pick<CatalogueBook, 'id' | 'coverPath' | 'coverUrl'>,
 ): string | null {
-  return book.coverPath || book.coverUrl ? `/api/covers/${book.id}` : null;
+  const source = book.coverUrl || book.coverPath;
+  if (!source) return null;
+  const version = createHash('sha256').update(source).digest('hex').slice(0, 12);
+  return `/api/covers/${book.id}?v=${version}`;
 }
 
 export type CoverResult =

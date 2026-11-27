@@ -282,8 +282,8 @@ describe('POST /api/import/bookpine', () => {
       synopsis: 'Synopsis from /books/OL101M.json',
       genres: ['Lighthouses', 'Fiction'],
       publisher: 'Fictional Press',
-      coverSrc: `/api/covers/${lantern.id}`,
     });
+    expect(lantern.coverSrc).toMatch(new RegExp(`^/api/covers/${lantern.id}\\?v=[0-9a-f]{12}$`));
     expect(lantern.coverPath).toBe(`${lantern.id}.png`);
     // The Goodreads page count wins over the looked-up one (Bookpine data first).
     expect(lantern.formats).toMatchObject([{ format: 'physical', pageCount: 412 }]);

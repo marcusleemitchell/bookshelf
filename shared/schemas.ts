@@ -432,7 +432,7 @@ export const bookListItemSchema = bookSchema.extend({
   currentRead: readSchema.nullable(),
   /** Current progress (SPEC §4) of the current read; null when unknown. */
   progressPercent: z.number().nullable(),
-  /** Relative URL of the cover (`/api/covers/:id`), or null when the book has no cover. */
+  /** Relative, versioned URL of the cover (`/api/covers/:id?v=<token>`), or null when the book has no cover. */
   coverSrc: z.string().nullable(),
 });
 export type BookListItem = z.infer<typeof bookListItemSchema>;
@@ -682,7 +682,7 @@ export const calendarSchema = z.object({
         z.object({
           bookId: idSchema,
           title: z.string(),
-          /** Relative cover URL (`/api/covers/:id`) or null. */
+          /** Relative, versioned cover URL (`/api/covers/:id?v=<token>`) or null. */
           coverUrl: z.string().nullable(),
           /** Minutes of the day's sessions with a known duration. */
           minutes: z.int().min(0),

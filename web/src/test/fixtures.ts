@@ -129,7 +129,7 @@ export function leGuin(overrides: Partial<BookDetail> = {}): BookDetail {
     formats: [makeFormat({ id: IDS.leGuinPhysical, bookId: IDS.leGuin, pageCount: 304 })],
     currentRead: read,
     progressPercent: 40,
-    coverSrc: `/api/covers/${IDS.leGuin}`,
+    coverSrc: `/api/covers/${IDS.leGuin}?v=0a1b2c3d4e5f`,
     reads: [read],
     estimatedFinish: { percentPerDay: 4, daysRemaining: 15, date: '2026-11-29' },
     ...overrides,
@@ -387,7 +387,7 @@ export function calendar(month = '2026-11'): CalendarResponse {
           {
             bookId: IDS.leGuin,
             title: 'The Left Hand of Darkness',
-            coverUrl: `/api/covers/${IDS.leGuin}`,
+            coverUrl: `/api/covers/${IDS.leGuin}?v=0a1b2c3d4e5f`,
             minutes: 30,
             untimedSessions: 0,
           },
@@ -399,7 +399,7 @@ export function calendar(month = '2026-11'): CalendarResponse {
           {
             bookId: IDS.leGuin,
             title: 'The Left Hand of Darkness',
-            coverUrl: `/api/covers/${IDS.leGuin}`,
+            coverUrl: `/api/covers/${IDS.leGuin}?v=0a1b2c3d4e5f`,
             minutes: 45,
             untimedSessions: 0,
           },

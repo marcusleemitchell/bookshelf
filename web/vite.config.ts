@@ -55,7 +55,8 @@ export default defineConfig({
         skipWaiting: true,
         runtimeCaching: [
           {
-            // Cover images: served from our origin, cached for offline use.
+            // Cover images: served from our origin, cached for offline use. Their
+            // URLs are versioned (`?v=`) so a replaced cover is fetched afresh.
             urlPattern: ({ url, sameOrigin }) =>
               sameOrigin && url.pathname.startsWith('/api/covers/'),
             handler: 'CacheFirst',

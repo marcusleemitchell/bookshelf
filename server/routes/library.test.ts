@@ -44,6 +44,11 @@ function expectError(res: { status: number; body: unknown }, status: number, cod
   return body;
 }
 
+/** `coverSrc` is `/api/covers/:id?v=<12 hex>`, versioned by the cover's source. */
+function coverSrcPattern(bookId: string): RegExp {
+  return new RegExp(`^/api/covers/${bookId}\\?v=[0-9a-f]{12}$`);
+}
+
 describe('POST /api/books', () => {
   it('creates a manual book with defaults', async () => {
     const book = await addBook({ authors: ['Frank Herbert'] });
@@ -146,7 +151,7 @@ describe('POST /api/books', () => {
     env.fetchMock.on('https://covers.example.org/', () => image());
     const book = await addBook({ coverUrl: 'https://covers.example.org/dune.png' });
     expect(book.coverPath).toBe(`${book.id}.png`);
-    expect(book.coverSrc).toBe(`/api/covers/${book.id}`);
+    expect(book.coverSrc).toMatch(coverSrcPattern(book.id));
     expect(readFileSync(join(env.ctx.config.coversDir, `${book.id}.png`))).toEqual(PNG_BYTES);
     expect(env.fetchMock.calls[0]?.headers['user-agent']).toMatch(/^Bookshelf/);
   });
@@ -155,7 +160,7 @@ describe('POST /api/books', () => {
     env.fetchMock.on('https://covers.example.org/', () => new Response('nope', { status: 500 }));
     const book = await addBook({ coverUrl: 'https://covers.example.org/missing.jpg' });
     expect(book.coverPath).toBeNull();
-    expect(book.coverSrc).toBe(`/api/covers/${book.id}`);
+    expect(book.coverSrc).toMatch(coverSrcPattern(book.id));
     expect(env.logs.some((log) => log['msg'] === 'Cover download failed')).toBe(true);
   });
 
@@ -411,6 +416,14 @@ describe('GET/PATCH/DELETE /api/books/:id', () => {
     });
     expect(changed.body.coverPath).toBe(`${book.id}.jpg`);
     expect(existsSync(join(env.ctx.config.coversDir, `${book.id}.png`))).toBe(false);
+    // A new cover gets a new URL, so the browser and service worker caches
+    // (keyed by URL) never keep showing the old image.
+    expect(changed.body.coverSrc).toMatch(coverSrcPattern(book.id));
+    expect(changed.body.coverSrc).not.toBe(book.coverSrc);
+    const untouched = await env.request<BookDetail>('PATCH', `/api/books/${book.id}`, {
+      title: 'Dune Messiah',
+    });
+    expect(untouched.body.coverSrc).toBe(changed.body.coverSrc);
 
     const cleared = await env.request<BookDetail>('PATCH', `/api/books/${book.id}`, {
       coverUrl: null,
@@ -678,7 +691,7 @@ describe('GET /api/covers/:bookId', () => {
   it('serves the cached file', async () => {
     env.fetchMock.on('https://covers.example.org/', () => image());
     const book = await addBook({ coverUrl: 'https://covers.example.org/c.png' });
-    const res = await env.app.request(`/api/covers/${book.id}`, { headers: env.authHeaders() });
+    const res = await env.app.request(book.coverSrc as string, { headers: env.authHeaders() });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('image/png');
     expect(res.headers.get('cache-control')).toBe('private, max-age=86400');
